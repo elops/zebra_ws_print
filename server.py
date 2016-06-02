@@ -1,12 +1,10 @@
 #!/usr/bin/env python3.5
 
 import asyncio
-import asyncio_redis
 import logging
 import websockets
 import base64
 import ast
-import sys
 
 # commands
 open_cfg = b'{ "open" : "v1.config.zebra.com" }'
