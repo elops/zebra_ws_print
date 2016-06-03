@@ -142,7 +142,7 @@ def main():
 
     start_server = websockets.serve(handler, 'localhost', 6000, subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
     loop.run_until_complete(start_server)
-    loop.run_until_complete(web.run_app(app))
+    loop.run_until_complete(web.run_app(app, host='127.0.0.1', port='6001'))
     loop.run_forever()
     loop.close()
     log.info("Shutting down websocket server")
