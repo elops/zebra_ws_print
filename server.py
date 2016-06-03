@@ -85,7 +85,7 @@ async def list_printers(request):
     return web.Response(text=output)
 
 
-async def zprint(request):
+async def zpl64_print(request):
     """ This coro receives print job which is relayed to appropriate queue """
     post_data = request.content.read_nowait()
     log.info('POST : {}'.format(post_data))
@@ -135,7 +135,7 @@ def main():
     log.info("Starting aiohttp server")
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
-    app.router.add_route('POST', '/zprint', zprint)
+    app.router.add_route('POST', '/print', zpl64_print)
 
     log.info("Starting websocket server!")
     loop = asyncio.get_event_loop()
