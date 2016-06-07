@@ -56,13 +56,16 @@ async def consumer(queue, message):
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
             log.info(' *** RAW channel established *** ')
-            printers[serial_num] = queue
+            printers[serial_num] = {}
+            printers[serial_num]['raw'] = queue
             #queue.put_nowait(print_hello_world)
             #queue.put_nowait(raw_cmd1)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
             log.info(' *** CONFIG channel established *** ')
+            printers[serial_num] = {}
+            printers[serial_num]['config'] = queue
             queue.put_nowait(cmd1)
 
 
@@ -87,6 +90,28 @@ async def list_printers(request):
 
 async def zpl64_print(request):
     """ This coro receives print job which is relayed to appropriate queue """
+    post_data = request.content.read_nowait().decode('utf-8')
+    log.info('POST : {}'.format(post_data))
+    for command in str(post_data).split('&'):
+
+        # 
+        delimiter_pos = str(command).find('=')
+        printer = str(command)[:delimiter_pos]
+        print_job_encoded = str(command)[delimiter_pos+1:]
+        printer = str(printer)
+
+        #
+        print_job = base64.b64decode(print_job_encoded)
+        log.info("Job : {}".format(print_job))
+
+        log.info('Printers : {}'.format(printers))
+        print_queue = printers[printer]['raw']
+        print_queue.put_nowait(print_job)
+
+    return web.Response(text='.')
+
+async def sgd(request):
+    """ This coro receives SGD JSON command and sends it to queue feeding config websocket of requested printer """
     post_data = request.content.read_nowait()
     log.info('POST : {}'.format(post_data))
     for command in str(post_data).split('&'):
@@ -98,11 +123,13 @@ async def zpl64_print(request):
 
         #print_queue printers[printer]
         log.info('Printers : {}'.format(printers))
-        print_queue = printers['50J161000398']
+        print_queue = printers['50J161000398']['config']
         print_queue.put_nowait(print_job)
         log.info('Print queue : {}'.format(type(print_queue)))
 
     return web.Response(text='.')
+
+
 
 
 async def handler(websocket, path):
@@ -136,6 +163,7 @@ def main():
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
     app.router.add_route('POST', '/print', zpl64_print)
+    app.router.add_route('POST', '/sgd', sgd)
 
     log.info("Starting websocket server!")
     loop = asyncio.get_event_loop()
