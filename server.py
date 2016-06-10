@@ -6,6 +6,7 @@ import websockets
 import base64
 import ast
 import json
+import aiohttp
 
 from aiohttp import web
 
@@ -23,6 +24,8 @@ cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
 # globals
 printers = {}
 
+# URL where to signal that print job is done
+print_job_done = 'https://elops.net/printSN/'
 
 def getSerialFromDiscovery(packet):
     """ receives bytes e.g.
@@ -44,7 +47,7 @@ async def consumer(queue, message):
     log.info('Consumed  {}'.format(message))
 
     # parse that incoming message
-    msg_dict = ast.literal_eval(message.decode("utf-8"))
+    msg_dict = json.loads(message.decode('utf-8'))
 
     if 'discovery_b64' in msg_dict.keys():
         serial_num = getSerialFromDiscovery(message)
@@ -67,6 +70,17 @@ async def consumer(queue, message):
             printers[serial_num] = {}
             printers[serial_num]['config'] = queue
             queue.put_nowait(cmd1)
+
+
+    # parse print job done messages
+    if 'alert' in msg_dict.keys():
+        if 'condition' in msg_dict['alert'].keys():
+            if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
+                printer_id = msg_dict['alert']['unique_id']
+                log.info('Printer {} printed a job'.format(printer_id))
+                # make get request to url
+                response = await aiohttp.request('GET', print_job_done + printer_id)
+
 
 
 async def producer(queue):
