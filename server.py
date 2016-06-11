@@ -7,6 +7,7 @@ import base64
 import ast
 import json
 import aiohttp
+import urllib
 
 from aiohttp import web
 
@@ -111,7 +112,7 @@ async def zpl64_print(request):
         # 
         delimiter_pos = str(command).find('=')
         printer = str(command)[:delimiter_pos]
-        print_job_encoded = str(command)[delimiter_pos+1:]
+        print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
         printer = str(printer)
 
         #
