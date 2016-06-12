@@ -8,6 +8,7 @@ import ast
 import json
 import aiohttp
 import urllib
+import requests
 
 from aiohttp import web
 
@@ -15,9 +16,9 @@ from aiohttp import web
 open_cfg = b'{ "open" : "v1.config.zebra.com" }'
 open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 
-print_hello_world = b"""
+print_spojeno = b"""
     ^XA
-    ^FT78,76^A0N,28,28^FH\^FDHello\&World^FS
+    ^FT78,76^A0N,28,28^FH\^FDPizzeria Chello -- Internet OK^FS
     ^XZ
     """
 cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
@@ -26,7 +27,8 @@ cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
 printers = {}
 
 # URL where to signal that print job is done
-print_job_done = 'https://elops.net/printSN/'
+# http://elops.net:7001/print_status?sn=50J161000398
+print_job_done = 'http://localhost:8081/print_status?sn='
 
 def getSerialFromDiscovery(packet):
     """ receives bytes e.g.
@@ -62,7 +64,7 @@ async def consumer(queue, message):
             log.info(' *** RAW channel established *** ')
             printers[serial_num] = {}
             printers[serial_num]['raw'] = queue
-            #queue.put_nowait(print_hello_world)
+            queue.put_nowait(print_spojeno)
             #queue.put_nowait(raw_cmd1)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
@@ -80,7 +82,8 @@ async def consumer(queue, message):
                 printer_id = msg_dict['alert']['unique_id']
                 log.info('Printer {} printed a job'.format(printer_id))
                 # make get request to url
-                response = await aiohttp.request('GET', print_job_done + printer_id)
+                #response = await aiohttp.request('GET', print_job_done + printer_id)
+                r = requests.get(print_job_done + printer_id, timeout=1)
 
 
 
@@ -193,6 +196,7 @@ def main():
 
 if __name__ == '__main__':
 
+    logging.basicConfig(filename='/home/zebraman/logs/python.log', filemode='w', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.DEBUG)
     log = logging.getLogger()
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
