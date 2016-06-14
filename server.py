@@ -27,9 +27,7 @@ cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
 printers = {}
 
 # URL where to signal that print job is done
-# http://elops.net:7001/print_status?sn=50J161000398
-#print_job_done = 'http://localhost:5000/print_status?sn='
-print_job_done = 'https://localhost:443/print_status?sn='
+print_job_done = 'https://pizza.elops.net/print_status?sn='
 
 def getSerialFromDiscovery(packet):
     """ receives bytes e.g.
@@ -85,8 +83,7 @@ async def consumer(queue, message):
                 # make get request to url
                 #response = await aiohttp.request('GET', print_job_done + printer_id)
                 try:
-                    r = requests.get(print_job_done + printer_id, timeout=1, verify=False)
-                    #r = requests.get(print_job_done + printer_id, timeout=1)
+                    r = requests.get(print_job_done + printer_id, timeout=1)
                 except requests.exceptions.ConnectionError:
                     log.error('Request failed to signal print job was done')
 
