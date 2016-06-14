@@ -125,12 +125,19 @@ async def zpl64_print(request):
         printer = str(printer)
 
         #
-        print_job = base64.b64decode(print_job_encoded)
-        log.info("Job : {}".format(print_job))
+        try:
+            print_job = base64.b64decode(print_job_encoded)
+            log.info("Job : {}".format(print_job))
 
-        log.info('Printers : {}'.format(printers))
-        print_queue = printers[printer]['raw']
-        print_queue.put_nowait(print_job)
+            log.info('Printers : {}'.format(printers))
+            if printer in printers.keys():
+                print_queue = printers[printer]['raw']
+                print_queue.put_nowait(print_job)
+            else:
+                log.error('Failed to print to printer with #SN : {}'.format(printer))
+
+        except:
+            log.error('Failed to decode msg : {}'.format(print_job_encoded))
 
     return web.Response(text='.')
 
