@@ -7,3 +7,9 @@ ws_port: 6000
 # we are running web app on this ip and port 
 web_ip: '127.0.0.1'
 web_port: 6001
+
+# log and debug
+log_file: '/home/zebraman/logs/python.log'
+
+# URL where to signal that print job is done
+print_job_done = 'https://pizza.elops.net/print_status?sn='
