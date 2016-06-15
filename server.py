@@ -6,6 +6,8 @@ import websockets
 import base64
 import ast
 import json
+import yaml
+import sys
 
 from aiohttp import web
 
@@ -22,7 +24,7 @@ cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
 
 # globals
 printers = {}
-
+options = {}
 
 def getSerialFromDiscovery(packet):
     """ receives bytes e.g.
@@ -140,15 +142,21 @@ def main():
     log.info("Starting websocket server!")
     loop = asyncio.get_event_loop()
 
-    start_server = websockets.serve(handler, 'localhost', 6000, subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
+    start_server = websockets.serve(handler, options['ws_ip'], options['ws_port'], subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
     loop.run_until_complete(start_server)
-    loop.run_until_complete(web.run_app(app, host='127.0.0.1', port='6001'))
+    loop.run_until_complete(web.run_app(app, host=options['web_ip'], port=options['web_port']))
     loop.run_forever()
     loop.close()
     log.info("Shutting down websocket server")
 
 
 if __name__ == '__main__':
+
+    try:
+        options = yaml.load(open('zebraman.cfg'))
+    except Exception as e:
+        print "Config file not present, exiting..."
+        sys.exit(1)
 
     log = logging.getLogger()
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +

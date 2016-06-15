@@ -1,0 +1,9 @@
+# Zebraman configuration file
+
+# we are running websocket on this ip and port 
+ws_ip: 'localhost'
+ws_port: 6000
+
+# we are running web app on this ip and port 
+web_ip: '127.0.0.1'
+web_port: 6001
