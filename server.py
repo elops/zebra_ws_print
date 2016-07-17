@@ -20,7 +20,8 @@ open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 
 print_spojeno = b"""
     ^XA
-    ^FT78,76^A0N,28,28^FH\^FDPizzeria Chello -- Internet OK^FS
+    ^LL 300
+    ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
     ^XZ
     """
 cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
