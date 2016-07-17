@@ -13,3 +13,6 @@ log_file: '/home/zebraman/logs/python.log'
 
 # URL where to signal that print job is done
 print_job_done = 'https://pizza.elops.net/print_status?sn='
+
+# URL where to signal what data was read from barcode scanner
+scan_data_url:  'https://pizza.elops.net/scanned_data?id='
