@@ -80,21 +80,30 @@ async def consumer(queue, message):
             queue.put_nowait(cmd1)
 
 
-    # parse print job done messages
+    # parse alert messages
     if 'alert' in msg_dict.keys():
+        log.info('ALERT PARSING')
         if 'condition' in msg_dict['alert'].keys():
+            # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
+                log.info('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
                 log.info('Printer {} printed a job'.format(printer_id))
                 # make get request to url
-                #response = await aiohttp.request('GET', print_job_done + printer_id)
+                response = await get(options['print_job_done'] + printer_id, compress=True) 
                 try:
-                    r = requests.get(options['print_job_done'] + printer_id, timeout=1)
-                except requests.exceptions.ConnectionError:
-                    log.error('Request failed to signal print job was done')
+                    print("RESPONSE : {}".format(response))
+                except:
+                    log.error('Unable to read response')
 
-                    
+            # get data scanned from barcode
+            if msg_dict['alert']['condition'] == 'SGD SET':
+                log.info('ALERT PARSING #SGD SET')
+                if 'setting_value' in msg_dict['alert'].keys():
+                    scanned_data = msg_dict['alert']['setting_value']
+                    printer_id = msg_dict['alert']['unique_id']
 
+                    log.info('Printer {} scanned data : {} '.format(printer_id, scanned_data))
 
 
 async def producer(queue):
