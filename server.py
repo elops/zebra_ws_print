@@ -45,6 +45,10 @@ def getSerialFromDiscovery(packet):
     else:
         return None
 
+async def get(*args, **kwargs):
+    response = await aiohttp.request('GET', *args, **kwargs)
+    return (await response.text())
+
 
 async def consumer(queue, message):
     await asyncio.sleep(0.1)
