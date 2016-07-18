@@ -45,8 +45,14 @@ def getSerialFromDiscovery(packet):
     else:
         return None
 
+
 async def get(*args, **kwargs):
     response = await aiohttp.request('GET', *args, **kwargs)
+    return (await response.text())
+
+
+async def post(*args, **kwargs):
+    response = await aiohttp.request('POST', *args, **kwargs)
     return (await response.text())
 
 
@@ -82,28 +88,34 @@ async def consumer(queue, message):
 
     # parse alert messages
     if 'alert' in msg_dict.keys():
-        log.info('ALERT PARSING')
+        log.debug('ALERT PARSING')
         if 'condition' in msg_dict['alert'].keys():
             # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
-                log.info('ALERT PARSING #PQ JOB COMPLETE')
+                log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
                 log.info('Printer {} printed a job'.format(printer_id))
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_id, compress=True) 
                 try:
-                    print("RESPONSE : {}".format(response))
+                    print("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
-                    log.error('Unable to read response')
+                    log.error('Unable to read response #1')
 
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
-                log.info('ALERT PARSING #SGD SET')
+                log.debug('ALERT PARSING #SGD SET')
                 if 'setting_value' in msg_dict['alert'].keys():
                     scanned_data = msg_dict['alert']['setting_value']
                     printer_id = msg_dict['alert']['unique_id']
 
                     log.info('Printer {} scanned data : {} '.format(printer_id, scanned_data))
+
+                    response = await post(options['scan_data_url'] + printer_id, data=json.dumps({'barcode' : scanned_data})) 
+                    try:
+                        log.info("SCAN DATA RELAY RESPONSE FOR DATA {} : {}".format(scanned_data, response))
+                    except:
+                        log.error('Unable to read response #2')
 
 
 async def producer(queue):
