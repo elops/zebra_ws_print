@@ -20,7 +20,8 @@ open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 
 print_spojeno = b"""
     ^XA
-    ^FT78,76^A0N,28,28^FH\^FDPizzeria Chello -- Internet OK^FS
+    ^LL 300
+    ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
     ^XZ
     """
 cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
@@ -43,6 +44,16 @@ def getSerialFromDiscovery(packet):
         return base64.b64decode(packet_dict['discovery_b64'])[188:188+12].decode('utf-8')
     else:
         return None
+
+
+async def get(*args, **kwargs):
+    response = await aiohttp.request('GET', *args, **kwargs)
+    return (await response.text())
+
+
+async def post(*args, **kwargs):
+    response = await aiohttp.request('POST', *args, **kwargs)
+    return (await response.text())
 
 
 async def consumer(queue, message):
@@ -75,21 +86,36 @@ async def consumer(queue, message):
             queue.put_nowait(cmd1)
 
 
-    # parse print job done messages
+    # parse alert messages
     if 'alert' in msg_dict.keys():
+        log.debug('ALERT PARSING')
         if 'condition' in msg_dict['alert'].keys():
+            # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
+                log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
                 log.info('Printer {} printed a job'.format(printer_id))
                 # make get request to url
-                #response = await aiohttp.request('GET', print_job_done + printer_id)
+                response = await get(options['print_job_done'] + printer_id, compress=True) 
                 try:
-                    r = requests.get(options['print_job_done'] + printer_id, timeout=1)
-                except requests.exceptions.ConnectionError:
-                    log.error('Request failed to signal print job was done')
+                    print("PQ JOB ACK RESPONSE  : {}".format(response))
+                except:
+                    log.error('Unable to read response #1')
 
-                    
+            # get data scanned from barcode
+            if msg_dict['alert']['condition'] == 'SGD SET':
+                log.debug('ALERT PARSING #SGD SET')
+                if 'setting_value' in msg_dict['alert'].keys():
+                    scanned_data = msg_dict['alert']['setting_value']
+                    printer_id = msg_dict['alert']['unique_id']
 
+                    log.info('Printer {} scanned data : {} '.format(printer_id, scanned_data))
+
+                    response = await post(options['scan_data_url'] + printer_id, data=json.dumps({'barcode' : scanned_data})) 
+                    try:
+                        log.info("SCAN DATA RELAY RESPONSE FOR DATA {} : {}".format(scanned_data, response))
+                    except:
+                        log.error('Unable to read response #2')
 
 
 async def producer(queue):
@@ -213,14 +239,14 @@ if __name__ == '__main__':
         print("Config file not present, exiting...")
         sys.exit(1)
 
-    logging.basicConfig(filename=options['log_file'], filemode='w', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.DEBUG)
+    logging.basicConfig(filename=options['log_file'], filemode='w', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
     log = logging.getLogger()
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
 
-    log.setLevel(logging.DEBUG)
+    log.setLevel(logging.INFO)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
     log.addHandler(ch)
 
