@@ -76,7 +76,6 @@ async def consumer(queue, message):
             printers[serial_num] = {}
             printers[serial_num]['raw'] = queue
             queue.put_nowait(print_spojeno)
-            #queue.put_nowait(raw_cmd1)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
@@ -98,7 +97,7 @@ async def consumer(queue, message):
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_id, compress=True) 
                 try:
-                    print("PQ JOB ACK RESPONSE  : {}".format(response))
+                    log.info("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
                     log.error('Unable to read response #1')
 
