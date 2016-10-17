@@ -56,7 +56,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, message):
+async def consumer(queue, id_queue, message):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
 
@@ -117,7 +117,7 @@ async def consumer(queue, message):
                         log.error('Unable to read response #2')
 
 
-async def producer(queue):
+async def producer(queue, id_queue):
     while True:
         try:
             command = queue.get_nowait()
@@ -190,17 +190,18 @@ async def handler(websocket, path):
     log.info('New websocket connection')
 
     queue = asyncio.Queue()
+    id_queue = asyncio.Queue()
 
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
-        producer_task = asyncio.ensure_future(producer(queue))
+        producer_task = asyncio.ensure_future(producer(queue, id_queue))
         done, pending = await asyncio.wait(
             [listener_task, producer_task],
             return_when=asyncio.FIRST_COMPLETED)
 
         if listener_task in done:
             message = listener_task.result()
-            await consumer(queue, message)
+            await consumer(queue, id_queue, message)
         else:
             listener_task.cancel()
 
