@@ -57,11 +57,9 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, id_queue, message):
+async def consumer(queue, message):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
-    log.info('C#ID QUEUE : {}/{}'.format(id(id_queue), id_queue))
-    log.info('C#QUEUE : {}/{}'.format(id(queue), queue))
 
     # parse that incoming message
     msg_dict = json.loads(message.decode('utf-8'))
@@ -78,6 +76,7 @@ async def consumer(queue, id_queue, message):
             log.info(' *** RAW channel established *** ')
             printers[serial_num] = {}
             printers[serial_num]['raw'] = queue
+            printers[serial_num]['last_id'] = 'connected'
             queue.put_nowait(print_spojeno)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
@@ -96,7 +95,8 @@ async def consumer(queue, id_queue, message):
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
-                log.info('Printer {} printed a job'.format(printer_id))
+                last_id = printers[printer_id]['last_id']
+                log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_id, compress=True) 
                 try:
@@ -120,7 +120,7 @@ async def consumer(queue, id_queue, message):
                         log.error('Unable to read response #2')
 
 
-async def producer(queue, id_queue):
+async def producer(queue):
     while True:
         try:
             command = queue.get_nowait()
@@ -158,6 +158,11 @@ async def zpl64_print(request):
             log.info('Printers : {}'.format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
+                printers[printer]['last_id'] = get_msgid(print_job)
+                # TODO :
+                # we are enqueuing a job here; we might as well note which
+                # ID this job had to co-relate which job was printed when
+                # printer responds back
                 print_queue.put_nowait(print_job)
             else:
                 log.error('Failed to print to printer with #SN : {}'.format(printer))
@@ -166,6 +171,7 @@ async def zpl64_print(request):
             log.error('Failed to decode msg : {}'.format(print_job_encoded))
 
     return web.Response(text='.')
+
 
 async def sgd(request):
     """ This coro receives SGD JSON command and sends it to queue feeding config websocket of requested printer """
@@ -193,16 +199,10 @@ async def handler(websocket, path):
     log.info('New websocket connection')
 
     queue = asyncio.Queue()
-    id_queue = asyncio.Queue()
-    last_id = None
-
-    # TODO : problem seems to be we can't communicate last_id effectively
-    # between consumer and producer
 
     while True:
-        log.info('Handler# Last ID : {}'.format(last_id))
         listener_task = asyncio.ensure_future(websocket.recv())
-        producer_task = asyncio.ensure_future(producer(queue, id_queue))
+        producer_task = asyncio.ensure_future(producer(queue))
         done, pending = await asyncio.wait(
             [listener_task, producer_task],
             return_when=asyncio.FIRST_COMPLETED)
@@ -211,27 +211,35 @@ async def handler(websocket, path):
         # message je json od printera koji kaze da je isprintao nesto
         if listener_task in done:
             message = listener_task.result()
-            await consumer(queue, id_queue, message)
+            await consumer(queue, message)
         else:
             listener_task.cancel()
 
-        # Tu dodje poruka od OrderMana, i nju saljemo printeru
-        # iz nje mozemo izvuci MSG ID
         if producer_task in done:
             message = producer_task.result()
             await websocket.send(message)
-            # now let's parse that message and if we find ID in it add it to
-            # id_queue
-            matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
-            if len(matches):
-                last_id = matches[0]
-                id_queue.put_nowait(last_id)
-                log.info('FOUND MSG ID : {}'.format(last_id))
-                log.info('H#ID QUEUE : {}/{}'.format(id(id_queue), id_queue))
-                log.info('H#QUEUE : {}/{}'.format(id(queue), queue))
-
+            # TODO : artificial sleep to slow down printer likely not needed
+            await asyncio.sleep(3)
         else:
             producer_task.cancel()
+
+
+def get_msgid(message):
+    """ This function searches string to find MSG UUID or some other indicator
+        which would identify type of msg
+        input is binary msg e.g. 
+        b'foo bar baz\n in few lines\n\n ^FX UUID: #1234 test\n'
+        output is string which is returned
+    """
+
+    matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
+    if len(matches):
+        last_id = matches[0]
+        log.info('FOUND MSG ID : {}'.format(last_id))
+        return last_id
+    else:
+        log.info('NO MSG ID FOUND IN : {}'.format(message))
+        return 'unknown'
 
 
 def main():
