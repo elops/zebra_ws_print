@@ -57,7 +57,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, message):
+async def consumer(queue, id_queue, message):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
 
@@ -76,7 +76,9 @@ async def consumer(queue, message):
             log.info(' *** RAW channel established *** ')
             printers[serial_num] = {}
             printers[serial_num]['raw'] = queue
-            printers[serial_num]['last_id'] = 'connected'
+            printers[serial_num]['id_q'] = id_queue
+            # Signaling IDs
+            await id_queue.put('connected')
             queue.put_nowait(print_spojeno)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
@@ -95,7 +97,13 @@ async def consumer(queue, message):
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
-                last_id = printers[printer_id]['last_id']
+                # Signaling IDs
+                id_queue = printers[printer_id]['id_q']
+                try:
+                    last_id = await id_queue.get()
+                except asyncio.queues.QueueEmpty:
+                    last_id = 'ERROR'
+
                 log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_id, compress=True) 
@@ -158,7 +166,9 @@ async def zpl64_print(request):
             log.info('Printers : {}'.format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
-                printers[printer]['last_id'] = get_msgid(print_job)
+                last_id = get_msgid(print_job)
+                id_queue = printers[printer]['id_q']
+                await id_queue.put(last_id)
                 # TODO :
                 # we are enqueuing a job here; we might as well note which
                 # ID this job had to co-relate which job was printed when
@@ -199,6 +209,7 @@ async def handler(websocket, path):
     log.info('New websocket connection')
 
     queue = asyncio.Queue()
+    id_queue = asyncio.Queue()
 
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
@@ -211,7 +222,7 @@ async def handler(websocket, path):
         # message je json od printera koji kaze da je isprintao nesto
         if listener_task in done:
             message = listener_task.result()
-            await consumer(queue, message)
+            await consumer(queue, id_queue, message)
         else:
             listener_task.cancel()
 
@@ -219,7 +230,7 @@ async def handler(websocket, path):
             message = producer_task.result()
             await websocket.send(message)
             # TODO : artificial sleep to slow down printer likely not needed
-            await asyncio.sleep(3)
+            #await asyncio.sleep(3)
         else:
             producer_task.cancel()
 
