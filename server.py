@@ -11,6 +11,7 @@ import urllib
 import requests
 import yaml
 import sys
+import re
 
 from aiohttp import web
 
@@ -59,6 +60,8 @@ async def post(*args, **kwargs):
 async def consumer(queue, id_queue, message):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
+    log.info('C#ID QUEUE : {}/{}'.format(id(id_queue), id_queue))
+    log.info('C#QUEUE : {}/{}'.format(id(queue), queue))
 
     # parse that incoming message
     msg_dict = json.loads(message.decode('utf-8'))
@@ -68,7 +71,7 @@ async def consumer(queue, id_queue, message):
         log.info(' *** MAIN channel established *** ')
         log.info("discovered S/N : {}".format(serial_num))
         queue.put_nowait(open_raw)
-    
+
     if 'channel_name' in msg_dict.keys():
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
@@ -191,27 +194,46 @@ async def handler(websocket, path):
 
     queue = asyncio.Queue()
     id_queue = asyncio.Queue()
+    last_id = None
+
+    # TODO : problem seems to be we can't communicate last_id effectively
+    # between consumer and producer
 
     while True:
+        log.info('Handler# Last ID : {}'.format(last_id))
         listener_task = asyncio.ensure_future(websocket.recv())
         producer_task = asyncio.ensure_future(producer(queue, id_queue))
         done, pending = await asyncio.wait(
             [listener_task, producer_task],
             return_when=asyncio.FIRST_COMPLETED)
 
+        # Tu dodje poruka od printera, message ne sadrzi nista pametno
+        # message je json od printera koji kaze da je isprintao nesto
         if listener_task in done:
             message = listener_task.result()
             await consumer(queue, id_queue, message)
         else:
             listener_task.cancel()
 
+        # Tu dodje poruka od OrderMana, i nju saljemo printeru
+        # iz nje mozemo izvuci MSG ID
         if producer_task in done:
             message = producer_task.result()
             await websocket.send(message)
+            # now let's parse that message and if we find ID in it add it to
+            # id_queue
+            matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
+            if len(matches):
+                last_id = matches[0]
+                id_queue.put_nowait(last_id)
+                log.info('FOUND MSG ID : {}'.format(last_id))
+                log.info('H#ID QUEUE : {}/{}'.format(id(id_queue), id_queue))
+                log.info('H#QUEUE : {}/{}'.format(id(queue), queue))
+
         else:
             producer_task.cancel()
 
-    
+
 def main():
 
     log.info("Starting aiohttp server")
