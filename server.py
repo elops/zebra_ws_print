@@ -11,6 +11,7 @@ import urllib
 import requests
 import yaml
 import sys
+import re
 
 from aiohttp import web
 
@@ -56,7 +57,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, message):
+async def consumer(queue, id_queue, message):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
 
@@ -68,13 +69,16 @@ async def consumer(queue, message):
         log.info(' *** MAIN channel established *** ')
         log.info("discovered S/N : {}".format(serial_num))
         queue.put_nowait(open_raw)
-    
+
     if 'channel_name' in msg_dict.keys():
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
             log.info(' *** RAW channel established *** ')
             printers[serial_num] = {}
             printers[serial_num]['raw'] = queue
+            printers[serial_num]['id_q'] = id_queue
+            # Signaling IDs
+            await id_queue.put('connected')
             queue.put_nowait(print_spojeno)
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
@@ -93,9 +97,17 @@ async def consumer(queue, message):
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_id = msg_dict['alert']['unique_id']
-                log.info('Printer {} printed a job'.format(printer_id))
+                # Signaling IDs
+                id_queue = printers[printer_id]['id_q']
+                try:
+                    last_id = await id_queue.get()
+                except asyncio.queues.QueueEmpty:
+                    log.error('ID Queue was empty, this is not supposed to happen')
+                    last_id = 'ERROR'
+
+                log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
                 # make get request to url
-                response = await get(options['print_job_done'] + printer_id, compress=True) 
+                response = await get(options['print_job_done'] + printer_id + '&job_id=' + last_id, compress=True) 
                 try:
                     log.info("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
@@ -136,12 +148,14 @@ async def list_printers(request):
 
 
 async def zpl64_print(request):
-    """ This coro receives print job which is relayed to appropriate queue """
+    """ This coro receives print job which is relayed to appropriate queue
+    """
+
     post_data = request.content.read_nowait().decode('utf-8')
     log.info('POST : {}'.format(post_data))
     for command in str(post_data).split('&'):
 
-        # 
+        #
         delimiter_pos = str(command).find('=')
         printer = str(command)[:delimiter_pos]
         print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
@@ -155,6 +169,13 @@ async def zpl64_print(request):
             log.info('Printers : {}'.format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
+                id_queue = printers[printer]['id_q']
+                last_id = get_msgid(print_job)
+
+                # Signaling which message is about to be printed
+                await id_queue.put(last_id)
+
+                # Send message to print queue
                 print_queue.put_nowait(print_job)
             else:
                 log.error('Failed to print to printer with #SN : {}'.format(printer))
@@ -164,10 +185,15 @@ async def zpl64_print(request):
 
     return web.Response(text='.')
 
+
 async def sgd(request):
-    """ This coro receives SGD JSON command and sends it to queue feeding config websocket of requested printer """
+    """ This coro receives SGD JSON command and sends it to queue feeding
+        config websocket of requested printer
+    """
+
     post_data = request.content.read_nowait()
     log.info('POST : {}'.format(post_data))
+
     for command in str(post_data).split('&'):
         printer, print_job_encoded = str(command).split('=')
         printer = str(printer)
@@ -184,12 +210,11 @@ async def sgd(request):
     return web.Response(text='.')
 
 
-
-
 async def handler(websocket, path):
     log.info('New websocket connection')
 
     queue = asyncio.Queue()
+    id_queue = asyncio.Queue()
 
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
@@ -200,17 +225,37 @@ async def handler(websocket, path):
 
         if listener_task in done:
             message = listener_task.result()
-            await consumer(queue, message)
+            await consumer(queue, id_queue, message)
         else:
             listener_task.cancel()
 
         if producer_task in done:
             message = producer_task.result()
             await websocket.send(message)
+            # artificial sleep to slow down printer can be put here if needed
+            #await asyncio.sleep(3)
         else:
             producer_task.cancel()
 
-    
+
+def get_msgid(message):
+    """ This function searches string to find MSG UUID or some other indicator
+        which would identify type of msg
+        input is binary msg e.g.
+        b'foo bar baz\n in few lines\n\n ^FX UUID: #1234 test\n'
+        output is string which is returned
+    """
+
+    matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
+    if len(matches):
+        last_id = matches[0]
+        log.info('Message contains ID : {}'.format(last_id))
+        return last_id
+    else:
+        log.warn('No ID found in message : {}'.format(message))
+        return 'unknown'
+
+
 def main():
 
     log.info("Starting aiohttp server")
