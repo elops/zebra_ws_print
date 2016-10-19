@@ -102,11 +102,12 @@ async def consumer(queue, id_queue, message):
                 try:
                     last_id = await id_queue.get()
                 except asyncio.queues.QueueEmpty:
+                    log.error('ID Queue was empty, this is not supposed to happen')
                     last_id = 'ERROR'
 
                 log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
                 # make get request to url
-                response = await get(options['print_job_done'] + printer_id, compress=True) 
+                response = await get(options['print_job_done'] + printer_id + '&job_id=' + last_id, compress=True) 
                 try:
                     log.info("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
@@ -147,12 +148,14 @@ async def list_printers(request):
 
 
 async def zpl64_print(request):
-    """ This coro receives print job which is relayed to appropriate queue """
+    """ This coro receives print job which is relayed to appropriate queue
+    """
+
     post_data = request.content.read_nowait().decode('utf-8')
     log.info('POST : {}'.format(post_data))
     for command in str(post_data).split('&'):
 
-        # 
+        #
         delimiter_pos = str(command).find('=')
         printer = str(command)[:delimiter_pos]
         print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
@@ -166,13 +169,13 @@ async def zpl64_print(request):
             log.info('Printers : {}'.format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
-                last_id = get_msgid(print_job)
                 id_queue = printers[printer]['id_q']
+                last_id = get_msgid(print_job)
+
+                # Signaling which message is about to be printed
                 await id_queue.put(last_id)
-                # TODO :
-                # we are enqueuing a job here; we might as well note which
-                # ID this job had to co-relate which job was printed when
-                # printer responds back
+
+                # Send message to print queue
                 print_queue.put_nowait(print_job)
             else:
                 log.error('Failed to print to printer with #SN : {}'.format(printer))
@@ -184,9 +187,13 @@ async def zpl64_print(request):
 
 
 async def sgd(request):
-    """ This coro receives SGD JSON command and sends it to queue feeding config websocket of requested printer """
+    """ This coro receives SGD JSON command and sends it to queue feeding
+        config websocket of requested printer
+    """
+
     post_data = request.content.read_nowait()
     log.info('POST : {}'.format(post_data))
+
     for command in str(post_data).split('&'):
         printer, print_job_encoded = str(command).split('=')
         printer = str(printer)
@@ -203,8 +210,6 @@ async def sgd(request):
     return web.Response(text='.')
 
 
-
-
 async def handler(websocket, path):
     log.info('New websocket connection')
 
@@ -218,8 +223,6 @@ async def handler(websocket, path):
             [listener_task, producer_task],
             return_when=asyncio.FIRST_COMPLETED)
 
-        # Tu dodje poruka od printera, message ne sadrzi nista pametno
-        # message je json od printera koji kaze da je isprintao nesto
         if listener_task in done:
             message = listener_task.result()
             await consumer(queue, id_queue, message)
@@ -229,7 +232,7 @@ async def handler(websocket, path):
         if producer_task in done:
             message = producer_task.result()
             await websocket.send(message)
-            # TODO : artificial sleep to slow down printer likely not needed
+            # artificial sleep to slow down printer can be put here if needed
             #await asyncio.sleep(3)
         else:
             producer_task.cancel()
@@ -238,7 +241,7 @@ async def handler(websocket, path):
 def get_msgid(message):
     """ This function searches string to find MSG UUID or some other indicator
         which would identify type of msg
-        input is binary msg e.g. 
+        input is binary msg e.g.
         b'foo bar baz\n in few lines\n\n ^FX UUID: #1234 test\n'
         output is string which is returned
     """
@@ -246,10 +249,10 @@ def get_msgid(message):
     matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
     if len(matches):
         last_id = matches[0]
-        log.info('FOUND MSG ID : {}'.format(last_id))
+        log.info('Message contains ID : {}'.format(last_id))
         return last_id
     else:
-        log.info('NO MSG ID FOUND IN : {}'.format(message))
+        log.warn('No ID found in message : {}'.format(message))
         return 'unknown'
 
 
