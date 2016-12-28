@@ -244,6 +244,7 @@ async def handler(websocket, path):
             break
         except Exception as e:
             log.error('Unexpected exception : {}'.format(e))
+            break
 
 
 def get_msgid(message):
