@@ -240,9 +240,13 @@ async def handler(websocket, path):
                 producer_task.cancel()
 
         except websockets.exceptions.ConnectionClosed as e:
+            producer_task.cancel()
+            listener_task.cancel()
             log.info('Websocket connection terminated : {}'.format(e))
             break
         except Exception as e:
+            producer_task.cancel()
+            listener_task.cancel()
             log.error('Unexpected exception : {}'.format(e))
             break
 
