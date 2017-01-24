@@ -22,7 +22,7 @@ open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 print_spojeno = b"""
     ^XA
     ^LL 200
-    ^FT78,76^A0N,28,28^FH\^FD CONNECTED TO DEMO : OK ^FS
+    ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
     ^XZ
     """
 cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
@@ -57,7 +57,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, id_queue, message):
+async def consumer(queue, id_queue, message, printer_id, channel_name):
     await asyncio.sleep(0.1)
     log.info('Consumed  {}'.format(message))
 
@@ -69,6 +69,8 @@ async def consumer(queue, id_queue, message):
         log.info(' *** MAIN channel established *** ')
         log.info("discovered S/N : {}".format(serial_num))
         queue.put_nowait(open_raw)
+        printer_id.set_result(serial_num)
+        channel_name.set_result('MAIN')
 
     if 'channel_name' in msg_dict.keys():
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
@@ -78,8 +80,10 @@ async def consumer(queue, id_queue, message):
             printers[serial_num]['raw'] = queue
             printers[serial_num]['id_q'] = id_queue
             # Signaling IDs
-            await id_queue.put('connected')
             queue.put_nowait(print_spojeno)
+            await id_queue.put('connected')
+            printer_id.set_result(serial_num)
+            channel_name.set_result('RAW')
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
             serial_num = msg_dict['unique_id']
@@ -87,6 +91,8 @@ async def consumer(queue, id_queue, message):
             printers[serial_num] = {}
             printers[serial_num]['config'] = queue
             queue.put_nowait(cmd1)
+            printer_id.set_result(serial_num)
+            channel_name.set_result('CONFIG')
 
 
     # parse alert messages
@@ -223,6 +229,8 @@ async def sgd(request):
 async def handler(websocket, path):
     log.info('New websocket connection')
 
+    printer_id = asyncio.Future()
+    channel_name = asyncio.Future()
     queue = asyncio.Queue()
     id_queue = asyncio.Queue()
 
@@ -237,28 +245,29 @@ async def handler(websocket, path):
 
             if listener_task in done:
                 message = listener_task.result()
-                await consumer(queue, id_queue, message)
+                await consumer(queue, id_queue, message, printer_id, channel_name)
             else:
                 listener_task.cancel()
 
             if producer_task in done:
                 message = producer_task.result()
                 await websocket.send(message)
-                # artificial sleep to slow down printer can be put here if needed
-                #await asyncio.sleep(3)
             else:
                 producer_task.cancel()
 
         except websockets.exceptions.ConnectionClosed as e:
             producer_task.cancel()
             listener_task.cancel()
-            log.info('Websocket connection terminated : {}'.format(e))
+            log.info('[{}] [{}] Websocket connection terminated : {}'.format(printer_id.result(), channel_name.result(), e))
             break
         except Exception as e:
             producer_task.cancel()
             listener_task.cancel()
-            log.error('Unexpected exception : {}'.format(e))
+            log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id.result(), channel_name.result(), e))
             break
+
+    log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id.result(), channel_name.result()))
+    response = await get(options['print_job_done'] + printer_id.result() + '&job_id=disconnected&channel=' + channel_name.result(), compress=True)
 
 
 def get_msgid(message):
