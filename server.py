@@ -21,8 +21,8 @@ open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 
 print_spojeno = b"""
     ^XA
-    ^LL 300
-    ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
+    ^LL 200
+    ^FT78,76^A0N,28,28^FH\^FD CONNECTED TO DEMO : OK ^FS
     ^XZ
     """
 cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
@@ -164,9 +164,8 @@ async def zpl64_print(request):
         #
         try:
             print_job = base64.b64decode(print_job_encoded)
-            log.info("Job : {}".format(print_job))
-
-            log.info('Printers : {}'.format(printers))
+            log.info("[PRINT] Job : {}".format(print_job))
+            log.info("[PRINT] Printers : {}".format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
                 id_queue = printers[printer]['id_q']
@@ -178,10 +177,10 @@ async def zpl64_print(request):
                 # Send message to print queue
                 print_queue.put_nowait(print_job)
             else:
-                log.error('Failed to print to printer with #SN : {}'.format(printer))
+                log.error('[PRINT] Failed to print to printer with #SN : {}'.format(printer))
 
         except:
-            log.error('Failed to decode msg : {}'.format(print_job_encoded))
+            log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
 
     return web.Response(text='.')
 
@@ -195,17 +194,28 @@ async def sgd(request):
     log.info('POST : {}'.format(post_data))
 
     for command in str(post_data).split('&'):
-        printer, print_job_encoded = str(command).split('=')
+        #
+        delimiter_pos = str(command).find('=')
+        printer = str(command)[:delimiter_pos]
+        print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
         printer = str(printer)
-        print_job = base64.b64decode(print_job_encoded)
-        print("Printer : {}".format(printer))
-        print("Job : {}".format(print_job))
 
-        #print_queue printers[printer]
-        log.info('Printers : {}'.format(printers))
-        print_queue = printers['50J161000398']['config']
-        print_queue.put_nowait(print_job)
-        log.info('Print queue : {}'.format(type(print_queue)))
+        #
+        try:
+            print_job = base64.b64decode(print_job_encoded)
+            log.info("[SGD] Job : {}".format(print_job))
+            log.info("[SGD] Printer : {}".format(printer))
+            log.info("[SGD] Printers : {}".format(printers))
+
+            if printer in printers.keys():
+                print_queue = printers[printer]['config']
+                print_queue.put_nowait(print_job)
+            else:
+                log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
+
+            log.info('[SGD] Print queue : {}'.format(type(print_queue)))
+        except:
+            log.error('[SGD] Failed to decode msg : {}'.format(print_job_encoded))
 
     return web.Response(text='.')
 
@@ -266,7 +276,7 @@ def get_msgid(message):
         return last_id
     else:
         log.warn('No ID found in message : {}'.format(message))
-        return 'unknown'
+        return 'custom'
 
 
 def main():
