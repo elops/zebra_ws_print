@@ -57,46 +57,57 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, id_queue, message, printer_id, channel_name):
+async def consumer(queue, id_queue, message, ws_info):
     await asyncio.sleep(0.1)
-    log.info('Consumed  {}'.format(message))
+    log.debug('Consumed  {}'.format(message))
 
     # parse that incoming message
     msg_dict = json.loads(message.decode('utf-8'))
+
     # read data from msg_dict
     if 'unique_id' in msg_dict.keys():
         serial_num = msg_dict['unique_id']
         log.debug('[{}] identified sn from message'.format(serial_num))
+    elif 'discovery_b64' in msg_dict.keys():
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+    elif 'alert' in msg_dict.keys():
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+    else:
+        log.info('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+
 
     # Handle discovery message which establishes the main websocket channel
     if 'discovery_b64' in msg_dict.keys():
         serial_num = getSerialFromDiscovery(message)
-        log.info(' *** MAIN channel established with : {} *** '.format(serial_num))
+        # Set future to help identify WS conn
+        ws_info.set_result((serial_num,'MAIN'))
+
+        log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
         queue.put_nowait(open_raw)
         queue.put_nowait(open_cfg)
-        # Set futures result so our parent knows what type and peer of this WS conn
-        printer_id.set_result(serial_num)
-        channel_name.set_result('MAIN')
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
 
+
     # Handle establish messages for RAW and CONFIG channel
     if 'channel_name' in msg_dict.keys():
-        printer_id.set_result(serial_num)
-
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
-            log.info(' *** RAW channel established with : {} *** '.format(serial_num))
+            # Set future to help identify WS conn
+            ws_info.set_result( (serial_num, 'RAW') )
+
+            log.debug(' *** RAW channel established with : {} *** '.format(serial_num))
             printers[serial_num]['raw'] = queue
             printers[serial_num]['id_q'] = id_queue
             # Print connected message, and feed 'id_queue' which print job was submitted
             queue.put_nowait(print_spojeno)
             await id_queue.put('connected')
-            channel_name.set_result('RAW')
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
-            log.info(' *** CONFIG channel established with : {} *** '.format(serial_num))
+            # Set future to help identify WS conn
+            ws_info.set_result( (serial_num, 'CONFIG') )
+
+            log.debug(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
-            channel_name.set_result('CONFIG')
             await get(options['print_job_done'] + serial_num + '&job_id=connected&channel=CONFIG', compress=True)
 
 
@@ -116,7 +127,7 @@ async def consumer(queue, id_queue, message, printer_id, channel_name):
                     log.error('ID Queue was empty, this is not supposed to happen')
                     last_id = 'ERROR'
 
-                log.info('Printer {} printed a job : {}'.format(printer_sn, last_id))
+                log.info('[{}] PRINT JOB DONE : {}'.format(printer_sn, last_id))
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_sn + '&job_id=' + last_id + '&channel=RAW', compress=True)
                 try:
@@ -163,7 +174,7 @@ async def zpl64_print(request):
     """
 
     post_data = request.content.read_nowait().decode('utf-8')
-    log.info('POST : {}'.format(post_data))
+    log.debug('POST : {}'.format(post_data))
     for command in str(post_data).split('&'):
 
         #
@@ -175,12 +186,13 @@ async def zpl64_print(request):
         #
         try:
             print_job = base64.b64decode(print_job_encoded)
-            log.info("[PRINT] Job : {}".format(print_job))
-            log.info("[PRINT] Printers : {}".format(printers))
+            log.debug("[{}] Job : {}".format(printer, print_job))
+            log.debug("[PRINT] Printers : {}".format(printers))
             if printer in printers.keys():
                 print_queue = printers[printer]['raw']
                 id_queue = printers[printer]['id_q']
                 last_id = get_msgid(print_job)
+                log.info('[{}] PRINT JOB QUEUED : {}'.format(printer, last_id))
 
                 # Signaling which message is about to be printed
                 await id_queue.put(last_id)
@@ -202,7 +214,7 @@ async def sgd(request):
     """
 
     post_data = request.content.read_nowait().decode('utf-8')
-    log.info('POST : {}'.format(post_data))
+    log.debug('POST : {}'.format(post_data))
 
     for command in str(post_data).split('&'):
         #
@@ -214,17 +226,15 @@ async def sgd(request):
         #
         try:
             sgd_command = base64.b64decode(task_b64_encoded)
-            log.info("[SGD] Job : {}".format(sgd_command))
-            log.info("[SGD] Printer : {}".format(printer))
-            log.info("[SGD] Printers : {}".format(printers))
+            log.info("[SGD] [{}] : {}".format(printer, sgd_command))
 
             if printer in printers.keys():
-                print_queue = printers[printer]['config']
-                print_queue.put_nowait(sgd_command)
+                sgd_queue = printers[printer]['config']
+                sgd_queue.put_nowait(sgd_command)
             else:
                 log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
 
-            log.info('[SGD] Print queue : {}'.format(type(print_queue)))
+            log.debug('[SGD] Print queue : {}'.format(type(sgd_queue)))
         except:
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
@@ -232,10 +242,10 @@ async def sgd(request):
 
 
 async def handler(websocket, path):
-    log.info('New websocket connection')
+    log.debug('New websocket connection')
 
-    printer_id = asyncio.Future()
-    channel_name = asyncio.Future()
+    ws_info = asyncio.Future()
+    ws_info.add_done_callback(new_ws_conn)
     queue = asyncio.Queue()
     id_queue = asyncio.Queue()
 
@@ -250,7 +260,7 @@ async def handler(websocket, path):
 
             if listener_task in done:
                 message = listener_task.result()
-                await consumer(queue, id_queue, message, printer_id, channel_name)
+                await consumer(queue, id_queue, message, ws_info)
             else:
                 listener_task.cancel()
 
@@ -263,12 +273,14 @@ async def handler(websocket, path):
         except websockets.exceptions.ConnectionClosed as e:
             producer_task.cancel()
             listener_task.cancel()
-            log.info('[{}] [{}] Websocket connection terminated : {}'.format(printer_id.result(), channel_name.result(), e))
+            printer_id, channel_name = ws_info.result()
+            log.info('[{}] [{}] Websocket connection terminated : {}'.format(printer_id, channel_name, e))
             break
         except Exception as e:
             producer_task.cancel()
             listener_task.cancel()
-            log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id.result(), channel_name.result(), e))
+            printer_id, channel_name = ws_info.result()
+            log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id, channel_name, e))
             break
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id.result(), channel_name.result()))
@@ -286,22 +298,27 @@ def get_msgid(message):
     matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
     if len(matches):
         last_id = matches[0]
-        log.info('Message contains ID : {}'.format(last_id))
+        log.debug('Message contains ID : {}'.format(last_id))
         return last_id
     else:
         log.warn('No ID found in message : {}'.format(message))
         return 'custom'
 
+def new_ws_conn(future):
+    """ Prints msg from future """
+    printer_id, channel_name = future.result()
+    log.info('[{}] [{}] New websocket connection'.format(printer_id, channel_name))
+
 
 def main():
 
-    log.info("Starting aiohttp server")
+    log.info("Starting aiohttp server : {}:{}".format(options['web_ip'], options['web_port']))
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
     app.router.add_route('POST', '/print', zpl64_print)
     app.router.add_route('POST', '/sgd', sgd)
 
-    log.info("Starting websocket server!")
+    log.info("Starting websocket server : {}:{}".format(options['ws_ip'], options['ws_port']))
     loop = asyncio.get_event_loop()
 
     start_server = websockets.serve(handler, options['ws_ip'], options['ws_port'], subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
@@ -321,7 +338,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     logging.basicConfig(filename=options['log_file'], filemode='w', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
-    log = logging.getLogger()
+    log = logging.getLogger(__name__)
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
 
