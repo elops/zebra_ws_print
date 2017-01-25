@@ -142,7 +142,7 @@ async def consumer(queue, id_queue, message, ws_info):
                     scanned_data = msg_dict['alert']['setting_value']
                     printer_sn = msg_dict['alert']['unique_id']
 
-                    log.info('Printer {} scanned data : {} '.format(printer_sn, scanned_data))
+                    log.info('{} SCANNED DATA : {} '.format(printer_sn, scanned_data))
 
                     response = await post(options['scan_data_url'] + printer_sn, data=json.dumps({'barcode' : scanned_data}))
                     try:
