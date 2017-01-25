@@ -113,7 +113,7 @@ async def consumer(queue, id_queue, message, printer_id, channel_name):
 
                 log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
                 # make get request to url
-                response = await get(options['print_job_done'] + printer_id + '&job_id=' + last_id, compress=True) 
+                response = await get(options['print_job_done'] + printer_id + '&job_id=' + last_id + '&channel=RAW', compress=True)
                 try:
                     log.info("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
