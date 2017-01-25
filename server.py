@@ -63,36 +63,41 @@ async def consumer(queue, id_queue, message, printer_id, channel_name):
 
     # parse that incoming message
     msg_dict = json.loads(message.decode('utf-8'))
+    # read data from msg_dict
+    if 'unique_id' in msg_dict.keys():
+        serial_num = msg_dict['unique_id']
+        log.debug('[{}] identified sn from message'.format(serial_num))
 
+    # Handle discovery message which establishes the main websocket channel
     if 'discovery_b64' in msg_dict.keys():
         serial_num = getSerialFromDiscovery(message)
-        log.info(' *** MAIN channel established *** ')
-        log.info("discovered S/N : {}".format(serial_num))
+        log.info(' *** MAIN channel established with : {} *** '.format(serial_num))
         queue.put_nowait(open_raw)
+        queue.put_nowait(open_cfg)
+        # Set futures result so our parent knows what type and peer of this WS conn
         printer_id.set_result(serial_num)
         channel_name.set_result('MAIN')
+        # initialize global dictionary for this printer SN
+        printers[serial_num] = {}
 
+    # Handle establish messages for RAW and CONFIG channel
     if 'channel_name' in msg_dict.keys():
+        printer_id.set_result(serial_num)
+
         if 'v1.raw.zebra.com' == msg_dict['channel_name']:
-            serial_num = msg_dict['unique_id']
-            log.info(' *** RAW channel established *** ')
-            printers[serial_num] = {}
+            log.info(' *** RAW channel established with : {} *** '.format(serial_num))
             printers[serial_num]['raw'] = queue
             printers[serial_num]['id_q'] = id_queue
-            # Signaling IDs
+            # Print connected message, and feed 'id_queue' which print job was submitted
             queue.put_nowait(print_spojeno)
             await id_queue.put('connected')
-            printer_id.set_result(serial_num)
             channel_name.set_result('RAW')
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
-            serial_num = msg_dict['unique_id']
-            log.info(' *** CONFIG channel established *** ')
-            printers[serial_num] = {}
+            log.info(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
-            queue.put_nowait(cmd1)
-            printer_id.set_result(serial_num)
             channel_name.set_result('CONFIG')
+            await get(options['print_job_done'] + serial_num + '&job_id=connected&channel=CONFIG', compress=True)
 
 
     # parse alert messages
@@ -102,18 +107,18 @@ async def consumer(queue, id_queue, message, printer_id, channel_name):
             # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
-                printer_id = msg_dict['alert']['unique_id']
+                printer_sn = msg_dict['alert']['unique_id']
                 # Signaling IDs
-                id_queue = printers[printer_id]['id_q']
+                id_queue = printers[printer_sn]['id_q']
                 try:
                     last_id = await id_queue.get()
                 except asyncio.queues.QueueEmpty:
                     log.error('ID Queue was empty, this is not supposed to happen')
                     last_id = 'ERROR'
 
-                log.info('Printer {} printed a job : {}'.format(printer_id, last_id))
+                log.info('Printer {} printed a job : {}'.format(printer_sn, last_id))
                 # make get request to url
-                response = await get(options['print_job_done'] + printer_id + '&job_id=' + last_id + '&channel=RAW', compress=True)
+                response = await get(options['print_job_done'] + printer_sn + '&job_id=' + last_id + '&channel=RAW', compress=True)
                 try:
                     log.info("PQ JOB ACK RESPONSE  : {}".format(response))
                 except:
@@ -124,11 +129,11 @@ async def consumer(queue, id_queue, message, printer_id, channel_name):
                 log.debug('ALERT PARSING #SGD SET')
                 if 'setting_value' in msg_dict['alert'].keys():
                     scanned_data = msg_dict['alert']['setting_value']
-                    printer_id = msg_dict['alert']['unique_id']
+                    printer_sn = msg_dict['alert']['unique_id']
 
-                    log.info('Printer {} scanned data : {} '.format(printer_id, scanned_data))
+                    log.info('Printer {} scanned data : {} '.format(printer_sn, scanned_data))
 
-                    response = await post(options['scan_data_url'] + printer_id, data=json.dumps({'barcode' : scanned_data})) 
+                    response = await post(options['scan_data_url'] + printer_sn, data=json.dumps({'barcode' : scanned_data}))
                     try:
                         log.info("SCAN DATA RELAY RESPONSE FOR DATA {} : {}".format(scanned_data, response))
                     except:
@@ -139,11 +144,11 @@ async def producer(queue):
     while True:
         try:
             command = queue.get_nowait()
-            log.info('Command retreived from queue : {}'.format(command))
+            log.debug('Command retreived from queue : {}'.format(command))
             return command
 
         except asyncio.queues.QueueEmpty:
-            #log.info('Queue is empty exception')
+            log.debug('Queue is empty exception')
             await asyncio.sleep(0.1)
 
 
@@ -196,32 +201,32 @@ async def sgd(request):
         config websocket of requested printer
     """
 
-    post_data = request.content.read_nowait()
+    post_data = request.content.read_nowait().decode('utf-8')
     log.info('POST : {}'.format(post_data))
 
     for command in str(post_data).split('&'):
         #
         delimiter_pos = str(command).find('=')
         printer = str(command)[:delimiter_pos]
-        print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
+        task_b64_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
         printer = str(printer)
 
         #
         try:
-            print_job = base64.b64decode(print_job_encoded)
-            log.info("[SGD] Job : {}".format(print_job))
+            sgd_command = base64.b64decode(task_b64_encoded)
+            log.info("[SGD] Job : {}".format(sgd_command))
             log.info("[SGD] Printer : {}".format(printer))
             log.info("[SGD] Printers : {}".format(printers))
 
             if printer in printers.keys():
                 print_queue = printers[printer]['config']
-                print_queue.put_nowait(print_job)
+                print_queue.put_nowait(sgd_command)
             else:
                 log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
 
             log.info('[SGD] Print queue : {}'.format(type(print_queue)))
         except:
-            log.error('[SGD] Failed to decode msg : {}'.format(print_job_encoded))
+            log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
     return web.Response(text='.')
 
