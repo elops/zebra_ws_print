@@ -82,8 +82,8 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         ws_info.set_result((serial_num,'MAIN'))
 
         log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
-        queue.put_nowait(open_raw)
-        queue.put_nowait(open_cfg)
+        #queue.put_nowait(open_raw)
+        queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
 
@@ -159,7 +159,7 @@ async def producer(queue):
 
         except asyncio.queues.QueueEmpty:
             log.debug('Queue is empty exception')
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
 
 
 async def list_printers(request):
@@ -212,6 +212,8 @@ async def sgd(request):
         config websocket of requested printer
     """
 
+    sgd_command_future = asyncio.Future()
+
     post_data = request.content.read_nowait().decode('utf-8')
     log.debug('POST : {}'.format(post_data))
 
@@ -229,7 +231,11 @@ async def sgd(request):
 
             if printer in printers.keys():
                 sgd_queue = printers[printer]['config']
-                sgd_queue.put_nowait(sgd_command)
+
+                sgd_task = (sgd_command_future, sgd_command)
+                log.info('SGD TASK PUT IN QUEUE')
+                log.info('SGD TASK PUT IN QUEUE : {} '.format(sgd_task))
+                sgd_queue.put_nowait(sgd_task)
             else:
                 log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
 
@@ -265,7 +271,8 @@ async def handler(websocket, path):
                 listener_task.cancel()
 
             if producer_task in done:
-                message = producer_task.result()
+                #message = producer_task.result()
+                future_msg, message = producer_task.result()
                 await websocket.send(message)
             else:
                 producer_task.cancel()
@@ -343,9 +350,9 @@ if __name__ == '__main__':
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
 
-    log.setLevel(logging.INFO)
+    log.setLevel(logging.DEBUG)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.INFO)
+    ch.setLevel(logging.DEBUG)
     ch.setFormatter(formatter)
     log.addHandler(ch)
 
