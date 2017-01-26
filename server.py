@@ -56,7 +56,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, id_queue, message, ws_info):
+async def consumer(queue, id_queue, message, ws_info, future_msg):
     await asyncio.sleep(0.1)
     log.debug('Consumed  {}'.format(message))
 
@@ -247,6 +247,7 @@ async def handler(websocket, path):
     ws_info.add_done_callback(new_ws_conn)
     queue = asyncio.Queue()
     id_queue = asyncio.Queue()
+    future_msg = None
 
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
@@ -259,7 +260,7 @@ async def handler(websocket, path):
 
             if listener_task in done:
                 message = listener_task.result()
-                await consumer(queue, id_queue, message, ws_info)
+                await consumer(queue, id_queue, message, ws_info, future_msg)
             else:
                 listener_task.cancel()
 
