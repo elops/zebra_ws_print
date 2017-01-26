@@ -25,7 +25,6 @@ print_spojeno = b"""
     ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
     ^XZ
     """
-cmd1 = b'{}{"weblink.ip.conn1.num_connections":null}'
 
 # globals
 printers = {}
@@ -131,7 +130,7 @@ async def consumer(queue, id_queue, message, ws_info):
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_sn + '&job_id=' + last_id + '&channel=RAW', compress=True)
                 try:
-                    log.info("PQ JOB ACK RESPONSE  : {}".format(response))
+                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
                 except:
                     log.error('Unable to read response #1')
 
@@ -146,7 +145,7 @@ async def consumer(queue, id_queue, message, ws_info):
 
                     response = await post(options['scan_data_url'] + printer_sn, data=json.dumps({'barcode' : scanned_data}))
                     try:
-                        log.info("[{}] SCANNED DATA ACK '{}' : {}".format(printer_sn, scanned_data, response))
+                        log.info("[{}] SCANNED DATA : {} ACK {}".format(printer_sn, scanned_data, response))
                     except:
                         log.error('Unable to read response #2')
 
@@ -234,7 +233,7 @@ async def sgd(request):
             else:
                 log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
 
-            log.debug('[SGD] Print queue : {}'.format(type(sgd_queue)))
+            log.debug('[SGD] Queue : {}'.format(type(sgd_queue)))
         except:
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
