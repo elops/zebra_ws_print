@@ -83,7 +83,7 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         ws_info.set_result((serial_num,'MAIN'))
 
         log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
-        #queue.put_nowait((None, open_raw))
+        queue.put_nowait((None, open_raw))
         queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
