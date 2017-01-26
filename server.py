@@ -82,7 +82,7 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         ws_info.set_result((serial_num,'MAIN'))
 
         log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
-        #queue.put_nowait(open_raw)
+        queue.put_nowait((None, open_raw))
         queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
@@ -98,7 +98,7 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
             printers[serial_num]['raw'] = queue
             printers[serial_num]['id_q'] = id_queue
             # Print connected message, and feed 'id_queue' which print job was submitted
-            queue.put_nowait(print_spojeno)
+            queue.put_nowait((None, print_spojeno))
             await id_queue.put('connected')
 
         elif 'v1.config.zebra.com' == msg_dict['channel_name']:
@@ -172,6 +172,8 @@ async def zpl64_print(request):
     """ This coro receives print job which is relayed to appropriate queue
     """
 
+    print_job_future = asyncio.Future()
+
     post_data = request.content.read_nowait().decode('utf-8')
     log.debug('POST : {}'.format(post_data))
     for command in str(post_data).split('&'):
@@ -196,15 +198,21 @@ async def zpl64_print(request):
                 # Signaling which message is about to be printed
                 await id_queue.put(last_id)
 
+                print_task = (print_job_future, print_job)
+
                 # Send message to print queue
-                print_queue.put_nowait(print_job)
+                print_queue.put_nowait(print_task)
             else:
                 log.error('[PRINT] Failed to print to printer with #SN : {}'.format(printer))
 
         except:
             log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
 
-    return web.Response(text='.')
+
+    while not print_job_future.done():
+        await asyncio.sleep(0.5)
+
+    return web.Response(print_job_future.result())
 
 
 async def sgd(request):
@@ -243,7 +251,10 @@ async def sgd(request):
         except:
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
-    return web.Response(text='.')
+    while not sgd_command_future.done():
+        await asyncio.sleep(0.5)
+
+    return web.Response(sgd_command_future.result())
 
 
 async def handler(websocket, path):
@@ -350,9 +361,9 @@ if __name__ == '__main__':
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
 
-    log.setLevel(logging.DEBUG)
+    log.setLevel(logging.INFO)
     ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    ch.setLevel(logging.INFO)
     ch.setFormatter(formatter)
     log.addHandler(ch)
 
