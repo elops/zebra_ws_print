@@ -220,10 +220,10 @@ async def zpl64_print(request):
             log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
 
 
-    while not print_job_future.done():
-        await asyncio.sleep(0.1)
+#    while not print_job_future.done():
+#        await asyncio.sleep(0.1)
 
-    return web.Response(text=str(print_job_future.result()))
+    return web.Response(text='.')
 
 
 async def sgd(request):
