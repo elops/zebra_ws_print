@@ -142,11 +142,11 @@ async def consumer(queue, id_queue, message, ws_info):
                     scanned_data = msg_dict['alert']['setting_value']
                     printer_sn = msg_dict['alert']['unique_id']
 
-                    log.info('{} SCANNED DATA : {} '.format(printer_sn, scanned_data))
+                    log.info('[{}] SCANNED DATA : {} '.format(printer_sn, scanned_data))
 
                     response = await post(options['scan_data_url'] + printer_sn, data=json.dumps({'barcode' : scanned_data}))
                     try:
-                        log.info("SCAN DATA RELAY RESPONSE FOR DATA {} : {}".format(scanned_data, response))
+                        log.info("[{}] SCANNED DATA ACK '{}' : {}".format(printer_sn, scanned_data, response))
                     except:
                         log.error('Unable to read response #2')
 
@@ -283,8 +283,9 @@ async def handler(websocket, path):
             log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id, channel_name, e))
             break
 
-    log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id.result(), channel_name.result()))
-    response = await get(options['print_job_done'] + printer_id.result() + '&job_id=disconnected&channel=' + channel_name.result(), compress=True)
+    printer_id, channel_name = ws_info.result()
+    log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
+    response = await get(options['print_job_done'] + printer_id + '&job_id=disconnected&channel=' + channel_name, compress=True)
 
 
 def get_msgid(message):
