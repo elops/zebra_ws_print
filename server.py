@@ -72,7 +72,8 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
     elif 'alert' in msg_dict.keys():
         log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
     else:
-        log.info('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+        log.info('[{}] [PRINTER RESPONSE] : \n{}'.format(future_msg, message.decode('utf-8')))
+        future_msg.set_result(message.decode('utf-8'))
 
 
     # Handle discovery message which establishes the main websocket channel
@@ -82,7 +83,7 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         ws_info.set_result((serial_num,'MAIN'))
 
         log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
-        queue.put_nowait((None, open_raw))
+        #queue.put_nowait((None, open_raw))
         queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
@@ -116,6 +117,11 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         if 'condition' in msg_dict['alert'].keys():
             # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
+                # Try to relay message to caller via future
+                if future_msg is not None:
+                    log.info('[ALERT] Setting future')
+                    future_msg.set_result(msg_dict)
+                # --
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_sn = msg_dict['alert']['unique_id']
                 # Signaling IDs
@@ -137,6 +143,11 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
                 log.debug('ALERT PARSING #SGD SET')
+                # Try to relay message to caller via future
+                if future_msg is not None:
+                    log.info('[SGD SET] Setting future')
+                    future_msg.set_result(msg_dict)
+                # --
                 if 'setting_value' in msg_dict['alert'].keys():
                     scanned_data = msg_dict['alert']['setting_value']
                     printer_sn = msg_dict['alert']['unique_id']
@@ -252,7 +263,8 @@ async def sgd(request):
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
     while not sgd_command_future.done():
-        await asyncio.sleep(0.5)
+        log.info('[SGD] sleep loop waiting for future to be done')
+        await asyncio.sleep(2)
 
     return web.Response(sgd_command_future.result())
 
@@ -277,12 +289,15 @@ async def handler(websocket, path):
 
             if listener_task in done:
                 message = listener_task.result()
+                if future_msg is None:
+                    log.info('Starting consumer with future_msg - None')
+                else:
+                    log.info('Starting consumer with future_msg - OK')
                 await consumer(queue, id_queue, message, ws_info, future_msg)
             else:
                 listener_task.cancel()
 
             if producer_task in done:
-                #message = producer_task.result()
                 future_msg, message = producer_task.result()
                 await websocket.send(message)
             else:
