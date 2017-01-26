@@ -221,9 +221,9 @@ async def zpl64_print(request):
 
 
     while not print_job_future.done():
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.1)
 
-    return web.Response(print_job_future.result())
+    return web.Response(text=str(print_job_future.result()))
 
 
 async def sgd(request):
@@ -263,10 +263,9 @@ async def sgd(request):
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
 
     while not sgd_command_future.done():
-        log.info('[SGD] sleep loop waiting for future to be done')
-        await asyncio.sleep(2)
+        await asyncio.sleep(0.1)
 
-    return web.Response(sgd_command_future.result())
+    return web.Response(text=str(sgd_command_future.result()))
 
 
 async def handler(websocket, path):
