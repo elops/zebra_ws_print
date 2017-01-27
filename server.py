@@ -213,7 +213,11 @@ async def zpl64_print(request):
     """ This coro receives print job which is relayed to appropriate queue
     """
 
-    print_job_future = asyncio.Future()
+    # We don't need future for print jobs because it would make printing 
+    # a sync/blocking job, instead we will be responding to print jobs with '.'
+    # and as print job done confirmation returns reading from id_queue which
+    # job was printed and accordingly notify backend
+    #print_job_future = asyncio.Future()
     print_job_future = None
 
     post_data = request.content.read_nowait().decode('utf-8')
@@ -340,19 +344,9 @@ async def handler(websocket, path):
                 listener_task.cancel()
 
             if producer_task in done:
-                # sharing future_msg between consumer and producer like this is not reliable
-                #  e.g.
-                # NAme : {"weblink.ip.conn1.num_connections":"3"}
-                # Conn count : {"weblink.ip.conn1.num_connections":"3"}
-                # futures should be exchanged via queue; much like job IDs are
-                # Having same queue available in producer and consumer
-
-                # This is message we received from command queue (likely AioHTTP API)
-                # we are basically putting this into queue to be sent to WS
-
                 future_msg, message = producer_task.result()
                 if future_msg is not None:
-                    log.debug('[HANDLER] Producer sent us future, feeding it to queue')
+                    log.debug('[HANDLER] Producer sent us future, feeding it to queue where future is expected')
                     sgd_queue.put_nowait(future_msg)
                 await websocket.send(message)
             else:
@@ -409,6 +403,7 @@ def get_msgid(message):
         log.warn('No ID found in message : {}'.format(message))
         return 'custom'
 
+
 def new_ws_conn(future):
     """ Prints msg from future """
     printer_id, channel_name = future.result()
@@ -416,7 +411,6 @@ def new_ws_conn(future):
 
 
 def main():
-
     log.info("Starting aiohttp server : {}:{}".format(options['web_ip'], options['web_port']))
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
@@ -435,7 +429,6 @@ def main():
 
 
 if __name__ == '__main__':
-
     try:
         options = yaml.load(open('zebraman.cfg'))
     except Exception as e:
