@@ -57,6 +57,17 @@ async def post(*args, **kwargs):
 
 
 async def consumer(queue, id_queue, message, ws_info, sgd_queue):
+    """ This coroutine handles data that came from websocket, parses it
+        'message' - incomming data from websocket
+        'queue' - fifo queue which is used to feed raw queue (print jobs)
+        'id_queue' - fifo queue for tracking which print job was printed
+        'sgd_queue' - fifo queue for transporting asyncio.Future()
+                      which is used to relay SGD CMD response
+        'ws_info' - asyncio.Future() which is used to tell our handler more
+                    about peers of this WS connection, essentially tuple
+                    ('serial_number', 'channel_name')
+
+    """
     await asyncio.sleep(0.1)
     log.debug('Consumed  {}'.format(message))
     message_utf8 = message.decode('utf-8')
@@ -81,8 +92,8 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
         log.debug('[CONSUMER] Trying to get future from queue')
         sgd_future = sgd_queue.get_nowait()
     except asyncio.queues.QueueEmpty:
+        log.debug('[CONSUMER] has no future, likely not a SGD related consumer')
         sgd_future = None
-        log.debug('[CONSUMER] has no future :(')
 
     if sgd_future is not None:
         log.debug('[SETTING FUTURE]')
@@ -188,6 +199,7 @@ async def producer(queue):
 
         except asyncio.queues.QueueEmpty:
             log.debug('Queue is empty exception')
+            # lower sleep time will cause faster loops causing more CPU usage
             await asyncio.sleep(0.5)
 
 
@@ -285,6 +297,22 @@ async def sgd(request):
 
 
 async def handler(websocket, path):
+    """ Main handler for websocket connections
+
+        WS(client) --->> WS(server) listener_task(websocket.recv())
+        WS(client) <<--- WS(server) producer_task(read from queue, websocket.send())
+
+        has 2 tasks, read from websocket, other to send data via websocket
+        - listener_task
+            <<-- reads data from websocket
+        - producer_task
+            -->> ET
+            #1 read data from queue*
+            #2 send this data via websocket
+
+            * data is fed to this queue usually via AioHTTP API
+
+    """
     log.debug('New websocket connection')
 
     ws_info = asyncio.Future()
