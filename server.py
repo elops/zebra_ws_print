@@ -59,23 +59,26 @@ async def post(*args, **kwargs):
 async def consumer(queue, id_queue, message, ws_info, future_msg):
     await asyncio.sleep(0.1)
     log.debug('Consumed  {}'.format(message))
+    message_utf8 = message.decode('utf-8')
 
     # parse that incoming message
-    msg_dict = json.loads(message.decode('utf-8'))
+    msg_dict = json.loads(message_utf8)
 
     # read data from msg_dict
     if 'unique_id' in msg_dict.keys():
         serial_num = msg_dict['unique_id']
         log.debug('[{}] identified sn from message'.format(serial_num))
     elif 'discovery_b64' in msg_dict.keys():
-        log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
     elif 'alert' in msg_dict.keys():
-        log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
     else:
-        log.info('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
-        if future_msg is not None:
-            log.info('[SETTING FUTURE]')
-            future_msg.set_result(message.decode('utf-8'))
+        log.info('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
+
+    # Would be a shame to have future waiting if there is one...
+    if future_msg is not None:
+        log.info('[SETTING FUTURE]')
+        future_msg.set_result(message_utf8)
 
 
     # Handle discovery message which establishes the main websocket channel
@@ -85,11 +88,25 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         ws_info.set_result((serial_num,'MAIN'))
 
         log.debug(' *** MAIN channel established with : {} *** '.format(serial_num))
-        queue.put_nowait((None, open_raw))
-        queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
-        printers[serial_num] = {}
+        if serial_num in printers.keys():
+            log.info('[{}] [MAIN] looks like global array already knows about us'.format(serial_num))
+        else:
+            log.info('[{}] [MAIN] Creating new global dict for this printer'.format(serial_num))
+            printers[serial_num] = {}
         printers[serial_num]['main'] = queue
+
+        # Open seconday channels if needed
+        if 'raw' not in printers[serial_num].keys():
+            queue.put_nowait((None, open_raw))
+        else:
+            log.warning('[{}] [MAIN] Stale RAW channel found, skipping opening new one'.format(serial_num))
+
+        if 'config' not in printers[serial_num].keys():
+            queue.put_nowait((None, open_cfg))
+        else:
+            log.warning('[{}] [MAIN] Stale CONFIG channel found, skipping opening new one'.format(serial_num))
+
 
 
     # Handle establish messages for RAW and CONFIG channel
@@ -288,6 +305,13 @@ async def handler(websocket, path):
                 listener_task.cancel()
 
             if producer_task in done:
+                # sharing future_msg between consumer and producer like this is not reliable
+                #  e.g.
+                # NAme : {"weblink.ip.conn1.num_connections":"3"}
+                # Conn count : {"weblink.ip.conn1.num_connections":"3"}
+                # futures should be exchanged via queue; much like job IDs are
+                # Having same queue available in producer and consumer
+
                 future_msg, message = producer_task.result()
                 await websocket.send(message)
             else:
@@ -310,13 +334,18 @@ async def handler(websocket, path):
         future_msg.cancel()
 
     printer_id, channel_name = ws_info.result()
+    main_queue = printers[printer_id]['main']
     if channel_name == 'CONFIG':
-        log.info('Removing config queue reference')
         printers[printer_id].pop('config', None)
         # initiate reconnect of config channel
-        log.info('Attempting to re-connect config channel')
-        main_queue = printers[printer_id]['main']
+        log.info('[{}] [MAIN] Attempting to re-connect config channel'.format(printer_id))
         main_queue.put_nowait((None, open_cfg))
+    elif channel_name == 'RAW':
+        printers[printer_id].pop('raw', None)
+        # initiate reconnect of raw channel
+        log.info('[{}] [MAIN] Attempting to re-connect RAW channel'.format(printer_id))
+        main_queue.put_nowait((None, open_raw))
+
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
     response = await get(options['print_job_done'] + printer_id + '&job_id=disconnected&channel=' + channel_name, compress=True)
