@@ -72,8 +72,10 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
     elif 'alert' in msg_dict.keys():
         log.debug('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
     else:
-        log.info('[{}] [PRINTER RESPONSE] : \n{}'.format(future_msg, message.decode('utf-8')))
-        future_msg.set_result(message.decode('utf-8'))
+        log.info('[PRINTER RESPONSE] : \n{}'.format(message.decode('utf-8')))
+        if future_msg is not None:
+            log.info('[SETTING FUTURE]')
+            future_msg.set_result(message.decode('utf-8'))
 
 
     # Handle discovery message which establishes the main websocket channel
@@ -87,6 +89,7 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         queue.put_nowait((None, open_cfg))
         # initialize global dictionary for this printer SN
         printers[serial_num] = {}
+        printers[serial_num]['main'] = queue
 
 
     # Handle establish messages for RAW and CONFIG channel
@@ -117,11 +120,6 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
         if 'condition' in msg_dict['alert'].keys():
             # print job done message
             if msg_dict['alert']['condition'] == 'PQ JOB COMPLETED':
-                # Try to relay message to caller via future
-                if future_msg is not None:
-                    log.info('[ALERT] Setting future')
-                    future_msg.set_result(msg_dict)
-                # --
                 log.debug('ALERT PARSING #PQ JOB COMPLETE')
                 printer_sn = msg_dict['alert']['unique_id']
                 # Signaling IDs
@@ -143,11 +141,6 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
                 log.debug('ALERT PARSING #SGD SET')
-                # Try to relay message to caller via future
-                if future_msg is not None:
-                    log.info('[SGD SET] Setting future')
-                    future_msg.set_result(msg_dict)
-                # --
                 if 'setting_value' in msg_dict['alert'].keys():
                     scanned_data = msg_dict['alert']['setting_value']
                     printer_sn = msg_dict['alert']['unique_id']
@@ -261,6 +254,8 @@ async def sgd(request):
             log.debug('[SGD] Queue : {}'.format(type(sgd_queue)))
         except:
             log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
+            sgd_command_future.cancel()
+            return web.Response(text='Config channel disconnected')
 
     while not sgd_command_future.done():
         await asyncio.sleep(0.1)
@@ -288,10 +283,6 @@ async def handler(websocket, path):
 
             if listener_task in done:
                 message = listener_task.result()
-                if future_msg is None:
-                    log.info('Starting consumer with future_msg - None')
-                else:
-                    log.info('Starting consumer with future_msg - OK')
                 await consumer(queue, id_queue, message, ws_info, future_msg)
             else:
                 listener_task.cancel()
@@ -315,7 +306,18 @@ async def handler(websocket, path):
             log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id, channel_name, e))
             break
 
+    if future_msg is not None:
+        future_msg.cancel()
+
     printer_id, channel_name = ws_info.result()
+    if channel_name == 'CONFIG':
+        log.info('Removing config queue reference')
+        printers[printer_id].pop('config', None)
+        # initiate reconnect of config channel
+        log.info('Attempting to re-connect config channel')
+        main_queue = printers[printer_id]['main']
+        main_queue.put_nowait((None, open_cfg))
+
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
     response = await get(options['print_job_done'] + printer_id + '&job_id=disconnected&channel=' + channel_name, compress=True)
 
