@@ -12,6 +12,7 @@ import requests
 import yaml
 import sys
 import re
+import traceback
 
 from aiohttp import web
 
@@ -29,6 +30,7 @@ print_spojeno = b"""
 # globals
 printers = {}
 options = {}
+bigmessage = None
 
 
 def getSerialFromDiscovery(packet):
@@ -72,8 +74,34 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
     log.debug('Consumed  {}'.format(message))
     message_utf8 = message.decode('utf-8')
 
+    global bigmessage
+
     # parse that incoming message
-    msg_dict = json.loads(message_utf8)
+    try:
+        msg_dict = json.loads(message_utf8)
+    except json.decoder.JSONDecodeError:
+        log.error('Big message !!!')
+        # message was to big so we need to put it together
+        if bigmessage is not None:
+            log.info('big msg continuation')
+            bigmessage += message_utf8
+        else:
+            log.info('We received big msg and will try to glue it together')
+            bigmessage = message_utf8
+            return
+
+    if bigmessage is not None:
+        try:
+            msg_dict = json.loads(bigmessage)
+        except json.decoder.JSONDecodeError:
+            log.info('we expect there may be more data to complete big msg')
+            return
+
+        # we read whole msg if we reached this code so let's unset big_msg
+        message_utf8 = bigmessage
+        bigmessage = None
+
+
 
     # read data from msg_dict
     if 'unique_id' in msg_dict.keys():
@@ -363,6 +391,10 @@ async def handler(websocket, path):
             listener_task.cancel()
             printer_id, channel_name = ws_info.result()
             log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id, channel_name, e))
+            print("Exception in user code:")
+            print('-'*60)
+            traceback.print_exc(file=sys.stdout)
+            print('-'*60)
             break
 
     if future_msg is not None:
