@@ -258,9 +258,14 @@ async def producer(queue):
 
 
 async def list_printers(request):
-    output = json.dumps(printers)
-    log.info('OUTPUT JSON : {}'.format(output))
-    return web.Response(text=output)
+
+    output = ''
+
+    for printer in printers.keys():
+        for channel in printers[printer].keys():
+            output += "\n[{}] - {}".format(printer, channel)
+        output += "\n"
+    return web.Response(text=str(output))
 
 
 async def print_zpl(request):
@@ -438,17 +443,27 @@ async def handler(websocket, path):
         future_msg.cancel()
 
     printer_id, channel_name = ws_info.result()
-    main_queue = printers[printer_id]['main']
+
+    main_queue = None
+    if 'main' in printers[printer_id].keys():
+        main_queue = printers[printer_id]['main']
+
     if channel_name == 'CONFIG':
         printers[printer_id].pop('config', None)
         # initiate reconnect of config channel
-        log.info('[{}] [MAIN] Attempting to re-connect config channel'.format(printer_id))
-        main_queue.put_nowait((None, open_cfg))
+        if main_queue is not None:
+            log.info('[{}] [MAIN] Attempting to re-connect config channel'.format(printer_id))
+            main_queue.put_nowait((None, open_cfg))
     elif channel_name == 'RAW':
         printers[printer_id].pop('raw', None)
-        # initiate reconnect of raw channel
-        log.info('[{}] [MAIN] Attempting to re-connect RAW channel'.format(printer_id))
-        main_queue.put_nowait((None, open_raw))
+        if main_queue is not None:
+            log.info('[{}] [MAIN] Attempting to re-connect RAW channel'.format(printer_id))
+            main_queue.put_nowait((None, open_raw))
+    elif channel_name == 'MAIN':
+        log.info('[{}] [MAIN] channel is lost, printer should reconnect soon'.format(printer_id))
+        # cleanup queues; on reconnect new will be created...
+        printers[printer_id].pop('main', None)
+        printers[printer_id].pop('id_q', None)
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
     response = await get(options['print_job_done'] + printer_id + '&job_id=disconnected&channel=' + channel_name, compress=True)
