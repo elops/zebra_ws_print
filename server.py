@@ -16,7 +16,7 @@ import traceback
 
 from aiohttp import web
 
-# commands
+# globals
 open_cfg = b'{ "open" : "v1.config.zebra.com" }'
 open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 
@@ -27,10 +27,8 @@ print_spojeno = b"""
     ^XZ
     """
 
-# globals
 printers = {}
 options = {}
-bigmessage = None
 
 
 def getSerialFromDiscovery(packet):
@@ -41,11 +39,69 @@ def getSerialFromDiscovery(packet):
     """
 
     # convert packet to dictionary
-    packet_dict = ast.literal_eval(packet.decode("utf-8"))
+    packet_dict = ast.literal_eval(packet)
     if 'discovery_b64' in packet_dict.keys():
         return base64.b64decode(packet_dict['discovery_b64'])[188:188+12].decode('utf-8')
     else:
         return None
+
+
+def new_ws_conn(future):
+    """ Prints msg from future """
+    printer_id, channel_name = future.result()
+    log.info('[{}] [{}] New websocket connection'.format(printer_id, channel_name))
+
+
+def get_msgid(message):
+    """ This function searches string to find MSG UUID or some other indicator
+        which would identify type of msg
+        input is binary msg e.g.
+        b'foo bar baz\n in few lines\n\n ^FX UUID: #1234 test\n'
+        output is string which is returned
+    """
+
+    matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
+    if len(matches):
+        last_id = matches[0]
+        log.debug('Message contains ID : {}'.format(last_id))
+        return last_id
+    else:
+        log.warn('No ID found in message : {}'.format(message))
+        return 'custom'
+
+
+def glue_messages(message, full_message):
+    """ Glues parts of message
+        returns full_message (message glued so far)
+        if message is decodable by json.loads set end_of_msg = True
+    """
+
+    end_of_msg = False
+    message_dict = None
+    single_part = False
+
+    if full_message is None:
+        single_part = True
+        full_message = message
+    else:
+        full_message += message
+
+    # Check if we can json load 'full_message' ?
+    try:
+        message_dict = json.loads(full_message)
+    except json.decoder.JSONDecodeError:
+        log.info('Partial message, trying to glue it together')
+
+    if message_dict is not None:
+        end_of_msg = True
+
+    if end_of_msg and not single_part:
+        log.info('Finished glueing multi-frame message')
+
+    if end_of_msg and single_part:
+        log.debug('Single part message : {}'.format(full_message))
+
+    return (full_message, end_of_msg)
 
 
 async def get(*args, **kwargs):
@@ -72,47 +128,19 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
     """
     await asyncio.sleep(0.1)
     log.debug('Consumed  {}'.format(message))
-    message_utf8 = message.decode('utf-8')
 
-    global bigmessage
-
-    # parse that incoming message
-    try:
-        msg_dict = json.loads(message_utf8)
-    except json.decoder.JSONDecodeError:
-        log.error('Big message !!!')
-        # message was to big so we need to put it together
-        if bigmessage is not None:
-            log.info('big msg continuation')
-            bigmessage += message_utf8
-        else:
-            log.info('We received big msg and will try to glue it together')
-            bigmessage = message_utf8
-            return
-
-    if bigmessage is not None:
-        try:
-            msg_dict = json.loads(bigmessage)
-        except json.decoder.JSONDecodeError:
-            log.info('we expect there may be more data to complete big msg')
-            return
-
-        # we read whole msg if we reached this code so let's unset big_msg
-        message_utf8 = bigmessage
-        bigmessage = None
-
-
+    msg_dict = json.loads(message)
 
     # read data from msg_dict
     if 'unique_id' in msg_dict.keys():
         serial_num = msg_dict['unique_id']
         log.debug('[{}] identified sn from message'.format(serial_num))
     elif 'discovery_b64' in msg_dict.keys():
-        log.debug('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message))
     elif 'alert' in msg_dict.keys():
-        log.debug('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
+        log.debug('[PRINTER RESPONSE] : \n{}'.format(message))
     else:
-        log.info('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
+        log.info('[PRINTER RESPONSE] : \n{}'.format(message))
 
     # Get future from queue, if there is future set it
     # Would be a shame to have future waiting if there is one...
@@ -125,8 +153,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
     if sgd_future is not None:
         log.debug('[SETTING FUTURE]')
-        sgd_future.set_result(message_utf8)
-
+        sgd_future.set_result(message)
 
     # Handle discovery message which establishes the main websocket channel
     if 'discovery_b64' in msg_dict.keys():
@@ -153,7 +180,6 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
             queue.put_nowait((None, open_cfg))
         else:
             log.warning('[{}] [MAIN] Stale CONFIG channel found, skipping opening new one'.format(serial_num))
-
 
 
     # Handle establish messages for RAW and CONFIG channel
@@ -194,7 +220,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
                     log.error('ID Queue was empty, this is not supposed to happen')
                     last_id = 'ERROR'
 
-                log.info('[{}] PRINT JOB DONE : {}'.format(printer_sn, last_id))
+                log.info('[{}] PRINT JOB : {} DONE'.format(printer_sn, last_id))
                 # make get request to url
                 response = await get(options['print_job_done'] + printer_sn + '&job_id=' + last_id + '&channel=RAW', compress=True)
                 try:
@@ -232,12 +258,12 @@ async def producer(queue):
 
 
 async def list_printers(request):
-    output = json.dumps(list(printers.keys()))
+    output = json.dumps(printers)
     log.info('OUTPUT JSON : {}'.format(output))
     return web.Response(text=output)
 
 
-async def zpl64_print(request):
+async def print_zpl(request):
     """ This coro receives print job which is relayed to appropriate queue
     """
 
@@ -267,7 +293,7 @@ async def zpl64_print(request):
                 print_queue = printers[printer]['raw']
                 id_queue = printers[printer]['id_q']
                 last_id = get_msgid(print_job)
-                log.info('[{}] PRINT JOB QUEUED : {}'.format(printer, last_id))
+                log.info('[{}] PRINT JOB : {} QUEUED'.format(printer, last_id))
 
                 # Signaling which message is about to be printed
                 await id_queue.put(last_id)
@@ -353,6 +379,7 @@ async def handler(websocket, path):
     id_queue = asyncio.Queue()
     sgd_queue = asyncio.Queue()
     future_msg = None
+    full_message = None
 
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
@@ -366,8 +393,18 @@ async def handler(websocket, path):
             if listener_task in done:
                 # This is message we got from WS
                 # message is next parsed in 'consumer' handler
-                message = listener_task.result()
-                await consumer(queue, id_queue, message, ws_info, sgd_queue)
+                message = listener_task.result().decode('utf-8')
+                # message could be long, we need to put it together before we pass it on to consumer
+                # - full_message is msg that can be loaded with json.loads(message)
+                full_message, end_of_msg = glue_messages(message, full_message)
+                if end_of_msg:
+                    log.debug('Message is complete, relaying it to consumer')
+                    await consumer(queue, id_queue, full_message, ws_info, sgd_queue)
+                    full_message = None
+                else:
+                    log.debug('Message is incomplete, continuing to read')
+                    await asyncio.sleep(0.1)
+
             else:
                 listener_task.cancel()
 
@@ -413,40 +450,15 @@ async def handler(websocket, path):
         log.info('[{}] [MAIN] Attempting to re-connect RAW channel'.format(printer_id))
         main_queue.put_nowait((None, open_raw))
 
-
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
     response = await get(options['print_job_done'] + printer_id + '&job_id=disconnected&channel=' + channel_name, compress=True)
-
-
-def get_msgid(message):
-    """ This function searches string to find MSG UUID or some other indicator
-        which would identify type of msg
-        input is binary msg e.g.
-        b'foo bar baz\n in few lines\n\n ^FX UUID: #1234 test\n'
-        output is string which is returned
-    """
-
-    matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
-    if len(matches):
-        last_id = matches[0]
-        log.debug('Message contains ID : {}'.format(last_id))
-        return last_id
-    else:
-        log.warn('No ID found in message : {}'.format(message))
-        return 'custom'
-
-
-def new_ws_conn(future):
-    """ Prints msg from future """
-    printer_id, channel_name = future.result()
-    log.info('[{}] [{}] New websocket connection'.format(printer_id, channel_name))
 
 
 def main():
     log.info("Starting aiohttp server : {}:{}".format(options['web_ip'], options['web_port']))
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
-    app.router.add_route('POST', '/print', zpl64_print)
+    app.router.add_route('POST', '/print', print_zpl)
     app.router.add_route('POST', '/sgd', sgd)
 
     log.info("Starting websocket server : {}:{}".format(options['ws_ip'], options['ws_port']))
