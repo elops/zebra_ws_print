@@ -56,7 +56,7 @@ async def post(*args, **kwargs):
     return (await response.text())
 
 
-async def consumer(queue, id_queue, message, ws_info, future_msg):
+async def consumer(queue, id_queue, message, ws_info, sgd_queue):
     await asyncio.sleep(0.1)
     log.debug('Consumed  {}'.format(message))
     message_utf8 = message.decode('utf-8')
@@ -75,10 +75,18 @@ async def consumer(queue, id_queue, message, ws_info, future_msg):
     else:
         log.info('[PRINTER RESPONSE] : \n{}'.format(message_utf8))
 
+    # Get future from queue, if there is future set it
     # Would be a shame to have future waiting if there is one...
-    if future_msg is not None:
-        log.info('[SETTING FUTURE]')
-        future_msg.set_result(message_utf8)
+    try:
+        log.debug('[CONSUMER] Trying to get future from queue')
+        sgd_future = sgd_queue.get_nowait()
+    except asyncio.queues.QueueEmpty:
+        sgd_future = None
+        log.debug('[CONSUMER] has no future :(')
+
+    if sgd_future is not None:
+        log.debug('[SETTING FUTURE]')
+        sgd_future.set_result(message_utf8)
 
 
     # Handle discovery message which establishes the main websocket channel
@@ -259,8 +267,7 @@ async def sgd(request):
                 sgd_queue = printers[printer]['config']
 
                 sgd_task = (sgd_command_future, sgd_command)
-                log.info('SGD TASK PUT IN QUEUE')
-                log.info('SGD TASK PUT IN QUEUE : {} '.format(sgd_task))
+                log.debug('[SGD] TASK PUT IN QUEUE : {} '.format(sgd_task))
                 sgd_queue.put_nowait(sgd_task)
             else:
                 log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
@@ -284,6 +291,7 @@ async def handler(websocket, path):
     ws_info.add_done_callback(new_ws_conn)
     queue = asyncio.Queue()
     id_queue = asyncio.Queue()
+    sgd_queue = asyncio.Queue()
     future_msg = None
 
     while True:
@@ -296,8 +304,10 @@ async def handler(websocket, path):
                 return_when=asyncio.FIRST_COMPLETED)
 
             if listener_task in done:
+                # This is message we got from WS
+                # message is next parsed in 'consumer' handler
                 message = listener_task.result()
-                await consumer(queue, id_queue, message, ws_info, future_msg)
+                await consumer(queue, id_queue, message, ws_info, sgd_queue)
             else:
                 listener_task.cancel()
 
@@ -309,7 +319,13 @@ async def handler(websocket, path):
                 # futures should be exchanged via queue; much like job IDs are
                 # Having same queue available in producer and consumer
 
+                # This is message we received from command queue (likely AioHTTP API)
+                # we are basically putting this into queue to be sent to WS
+
                 future_msg, message = producer_task.result()
+                if future_msg is not None:
+                    log.debug('[HANDLER] Producer sent us future, feeding it to queue')
+                    sgd_queue.put_nowait(future_msg)
                 await websocket.send(message)
             else:
                 producer_task.cancel()
