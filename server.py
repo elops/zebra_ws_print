@@ -194,6 +194,7 @@ async def zpl64_print(request):
     """
 
     print_job_future = asyncio.Future()
+    print_job_future = None
 
     post_data = request.content.read_nowait().decode('utf-8')
     log.debug('POST : {}'.format(post_data))
@@ -228,10 +229,6 @@ async def zpl64_print(request):
 
         except:
             log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
-
-
-#    while not print_job_future.done():
-#        await asyncio.sleep(0.1)
 
     return web.Response(text='.')
 
