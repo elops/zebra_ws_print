@@ -358,6 +358,43 @@ async def sgd(request):
 
     return web.Response(text=str(sgd_command_future.result()))
 
+##---
+async def reconnect(request):
+    """ reconnects raw channel for specified printer if main channel is alive
+    """
+
+    post_data = request.content.read_nowait().decode('utf-8')
+    log.debug('POST : {}'.format(post_data))
+
+    for command in str(post_data).split('&'):
+        #
+        delimiter_pos = str(command).find('=')
+        printer = str(command)[:delimiter_pos]
+        channel = str(command)[delimiter_pos+1:]
+        #printer = str(printer)
+        #
+
+        if channel not in ('raw', 'config', 'cfg'):
+            return web.Response(text=str('Channel not recognized'))
+
+        if printer in printers.keys():
+            if 'main' in printers[printer].keys():
+                main_queue = printers[printer]['main']
+                if channel in 'raw':
+                    log.info('Trying to open RAW channel per API request')
+                    main_queue.put_nowait((None, open_raw))
+                    return web.Response(text=str('Trying to open RAW channel per API request'))
+                else:
+                    log.info('Trying to open CONFIG channel per API request')
+                    main_queue.put_nowait((None, open_cfg))
+                    return web.Response(text=str('Trying to open CONFIG channel per API request'))
+            else:
+                log.warning('Unable to find main channel for printer {}'.format(printer))
+                return web.Response(text=str('WARNING : Unable to find main channel for printer {}'.format(printer)))
+        else:
+            log.warning('Unable to find active printer {}'.format(printer))
+            return web.Response(text=str('WARNING : Unable to find active printer {}'.format(printer)))
+
 
 async def handler(websocket, path):
     """ Main handler for websocket connections
@@ -473,6 +510,7 @@ def main():
     log.info("Starting aiohttp server : {}:{}".format(options['web_ip'], options['web_port']))
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
+    app.router.add_route('POST', '/reconnect', reconnect)
     app.router.add_route('POST', '/print', print_zpl)
     app.router.add_route('POST', '/sgd', sgd)
 
