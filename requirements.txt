@@ -6,6 +6,7 @@ pexpect==4.1.0
 pickleshare==0.7.2
 ptyprocess==0.5.1
 readline==6.2.4.1
+requests==2.18.4
 simplegeneric==0.8.1
 traitlets==4.2.1
 websockets==3.1
