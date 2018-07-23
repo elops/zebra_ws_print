@@ -358,6 +358,29 @@ async def sgd(request):
 
     return web.Response(text=str(sgd_command_future.result()))
 
+
+async def ws_disconnect(ws, ws_info):
+    """ Disconnect dead websocket client. """
+    await ws.close()
+    printer_id, channel_name = ws_info.result()
+    log.info('[WEBSOCKET KEEPALIVE] closing connection to endpoint {} > channel {}'.format(printer_id, channel_name))
+
+
+async def ws_keep_alive(ws, ws_info):
+    """ Send websocket keepalive packets to clients. """
+    while True:
+        await asyncio.sleep(options['ws_keepalive_interval'])
+        printer_id, channel_name = ws_info.result()
+        try:
+            log.debug('[WEBSOCKET KEEPALIVE] send PING frame to endpoint {} > channel {}'.format(printer_id, channel_name))
+            pong = await ws.ping()
+            await asyncio.wait_for(pong, timeout=options['ws_endpoint_timeout'])
+        except asyncio.TimeoutError:
+            log.debug('[WEBSOCKET KEEPALIVE] missing PONG frame from endpoint {} > channel {}'.format(printer_id, channel_name))
+            await ws_disconnect(ws, ws_info)
+            await asyncio.sleep(1)
+
+
 ##---
 async def reconnect(request):
     """ reconnects raw channel for specified printer if main channel is alive
@@ -423,6 +446,9 @@ async def handler(websocket, path):
     future_msg = None
     full_message = None
 
+    # ensure that we ping printer regulary
+    ws_keep_alive_task = asyncio.ensure_future(ws_keep_alive(websocket, ws_info))
+
     while True:
         listener_task = asyncio.ensure_future(websocket.recv())
         producer_task = asyncio.ensure_future(producer(queue))
@@ -462,12 +488,14 @@ async def handler(websocket, path):
         except websockets.exceptions.ConnectionClosed as e:
             producer_task.cancel()
             listener_task.cancel()
+            ws_keep_alive_task.cancel()
             printer_id, channel_name = ws_info.result()
             log.info('[{}] [{}] Websocket connection terminated : {}'.format(printer_id, channel_name, e))
             break
         except Exception as e:
             producer_task.cancel()
             listener_task.cancel()
+            ws_keep_alive_task.cancel()
             printer_id, channel_name = ws_info.result()
             log.error('[{}] [{}] Websocket abnormally terminated : {}'.format(printer_id, channel_name, e))
             print("Exception in user code:")

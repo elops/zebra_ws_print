@@ -16,3 +16,7 @@ print_job_done = 'https://pizza.elops.net/print_status?sn='
 
 # POST URL where to signal what data was read from barcode scanner
 scan_data_url:  'https://pizza.elops.net/scanned_data?sn='
+
+# Websocket keepalive mechanism
+ws_keepalive_interval: 15
+ws_endpoint_timeout: 7
