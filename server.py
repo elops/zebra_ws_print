@@ -560,7 +560,7 @@ if __name__ == '__main__':
         print("Config file not present, exiting...")
         sys.exit(1)
 
-    logging.basicConfig(filename=options['log_file'], filemode='w', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
+    logging.basicConfig(filename=options['log_file'], filemode='a', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
     log = logging.getLogger(__name__)
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
