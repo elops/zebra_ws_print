@@ -134,12 +134,15 @@ def glue_messages(message, full_message):
 
 async def get(*args, **kwargs):
     response = await aiohttp.request('GET', *args, **kwargs)
-    return await response.text()
+    log.info('GET request status {} : '.format(response.status))
+    return (await response.text())
 
 
 async def post(*args, **kwargs):
     response = await aiohttp.request('POST', *args, **kwargs)
-    return await response.text()
+    
+    log.info('POST request status {} : '.format(response.status))
+    return (await response.text())
 
 
 async def consumer(queue, id_queue, message, ws_info, sgd_queue):
@@ -229,7 +232,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
             log.debug(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
-            #await post(options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }), compress=True)
+            await post(options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }), compress=True)
 
 
     # parse alert messages
@@ -249,12 +252,12 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
                     last_id = 'ERROR'
 
                 log.info('[{}] PRINT JOB : {} DONE'.format(printer_sn, last_id))
-                # make post request to url
-#                response = await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }), compress=True)
-#                try:
-#                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
-#                except:
-#                    log.error('Unable to read response #1')
+                # make get request to url
+                response = await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }), compress=True)
+                try:
+                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
+                except:
+                    log.error('Unable to read response #1')
 
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
