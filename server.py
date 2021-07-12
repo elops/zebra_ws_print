@@ -1,10 +1,11 @@
-#!/usr/bin/env python3.5
+#!/usr/bin/env python3.9
 
 import asyncio
 import logging
 import websockets
 import base64
 import ast
+#import simplejson as json
 import json
 import aiohttp
 import urllib
@@ -13,6 +14,9 @@ import yaml
 import sys
 import re
 import traceback
+import signal
+import time
+import os
 
 from aiohttp import web
 
@@ -23,12 +27,36 @@ open_raw = b'{ "open" : "v1.raw.zebra.com" }'
 print_spojeno = b"""
     ^XA
     ^LL 200
-    ^FT78,76^A0N,28,28^FH\^FD INTERNET CONNECTION : OK ^FS
+    ^PW 609
+    ^FT78,76^A0N,28,28^FH\^FD zebra.hallochef.net : OK ^FS
     ^XZ
     """
 
 printers = {}
 options = {}
+
+def write_pid_to_pidfile(pidfile_path):
+    """ Write the PID in the named PID file.
+
+        Get the numeric process ID (“PID”) of the current process
+        and write it to the named file as a line of text.
+
+        """
+    open_flags = (os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    open_mode = 0o644
+    pidfile_fd = os.open(pidfile_path, open_flags, open_mode)
+    pidfile = os.fdopen(pidfile_fd, 'w')
+
+    # According to the FHS 2.3 section on PID files in /var/run:
+    #
+    #   The file must consist of the process identifier in
+    #   ASCII-encoded decimal, followed by a newline character. For
+    #   example, if crond was process number 25, /var/run/crond.pid
+    #   would contain three characters: two, five, and newline.
+
+    pid = os.getpid()
+    pidfile.write("%s\n" % pid)
+    pidfile.close()
 
 
 def getSerialFromDiscovery(packet):
@@ -60,7 +88,7 @@ def get_msgid(message):
         output is string which is returned
     """
 
-    matches = re.findall(r'\^FX UUID: #(\d+)', message.decode('utf-8'))
+    matches = re.findall(r'\^FX UUID: #(\d+)', message)
     if len(matches):
         last_id = matches[0]
         log.debug('Message contains ID : {}'.format(last_id))
@@ -106,17 +134,13 @@ def glue_messages(message, full_message):
 
 async def get(*args, **kwargs):
     response = await aiohttp.request('GET', *args, **kwargs)
-    log.info('GET request status {} : '.format(response.status))
-    return (await response.text())
+    return await response.text()
 
 
 async def post(*args, **kwargs):
     response = await aiohttp.request('POST', *args, **kwargs)
-    #return (await response.text())
-    #return response.status
-    
-    log.info('POST request status {} : '.format(response.status))
-    return (await response.text())
+    return await response.text()
+
 
 async def consumer(queue, id_queue, message, ws_info, sgd_queue):
     """ This coroutine handles data that came from websocket, parses it
@@ -205,7 +229,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
             log.debug(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
-            await post(options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }), compress=True)
+            #await post(options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }), compress=True)
 
 
     # parse alert messages
@@ -225,12 +249,12 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
                     last_id = 'ERROR'
 
                 log.info('[{}] PRINT JOB : {} DONE'.format(printer_sn, last_id))
-                # make get request to url
-                response = await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }), compress=True)
-                try:
-                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
-                except:
-                    log.error('Unable to read response #1')
+                # make post request to url
+#                response = await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }), compress=True)
+#                try:
+#                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
+#                except:
+#                    log.error('Unable to read response #1')
 
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
@@ -252,7 +276,7 @@ async def producer(queue):
     while True:
         try:
             command = queue.get_nowait()
-            log.debug('Command retreived from queue : {}'.format(command))
+            log.info('Command retreived from queue : {}'.format(command))
             return command
 
         except asyncio.queues.QueueEmpty:
@@ -272,7 +296,23 @@ async def list_printers(request):
     return web.Response(text=str(output))
 
 
-async def print_zpl(request):
+async def print_zpl_ng_dummy(request):
+    """ This coro only attempts to unpack request """
+
+    buffer = b""
+    async for data, end_of_http_chunk in request.content.iter_chunks():
+        buffer += data
+
+    post_data = buffer.decode('utf-8')
+
+    log.info(post_data)
+    post_data = post_data.replace('\n', '\\n')
+    json_data = json.loads(post_data)
+
+    return web.Response(text='DUMMY')
+
+
+async def print_zpl_ng(request):
     """ This coro receives print job which is relayed to appropriate queue
     """
 
@@ -283,39 +323,43 @@ async def print_zpl(request):
     #print_job_future = asyncio.Future()
     print_job_future = None
 
-    post_data = request.content.read_nowait().decode('utf-8')
-    log.debug('POST : {}'.format(post_data))
-    for command in str(post_data).split('&'):
 
-        #
-        delimiter_pos = str(command).find('=')
-        printer = str(command)[:delimiter_pos]
-        print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
-        printer = str(printer)
+    buffer = b""
+    async for data, end_of_http_chunk in request.content.iter_chunks():
+        buffer += data
 
-        #
-        try:
-            print_job = base64.b64decode(print_job_encoded)
-            log.debug("[{}] Job : {}".format(printer, print_job))
-            log.debug("[PRINT] Printers : {}".format(printers))
-            if printer in printers.keys():
-                print_queue = printers[printer]['raw']
-                id_queue = printers[printer]['id_q']
-                last_id = get_msgid(print_job)
-                log.info('[{}] PRINT JOB : {} QUEUED'.format(printer, last_id))
 
-                # Signaling which message is about to be printed
-                await id_queue.put(last_id)
+    post_data = buffer.decode('utf-8')
+    post_data = post_data.replace('\n', '\\n')
+    json_data = json.loads(post_data)
 
-                print_task = (print_job_future, print_job)
+    log.info(json_data)
 
-                # Send message to print queue
-                print_queue.put_nowait(print_task)
-            else:
-                log.error('[PRINT] Failed to print to printer with #SN : {}'.format(printer))
+    ## needs to be commented out because we can't print diacritics in logging (it breaks teh shit)    
+    #log.info('[{}]: received print job\n{}'.format(json_data['sn'], json_data['data']))
 
-        except:
-            log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
+    printer_id = json_data['sn']
+    print_job = json_data['data']
+    try:
+        if printer_id in printers.keys():
+            print_queue = printers[printer_id]['raw']
+            id_queue = printers[printer_id]['id_q']
+            last_id = get_msgid(print_job)
+            log.info('[{}] PRINT JOB : {} QUEUED'.format(printer_id, last_id))
+
+            # Signaling which message is about to be printed
+            await id_queue.put(last_id)
+
+            print_task = (print_job_future, print_job.encode('utf-8'))
+
+            # Send message to print queue
+            print_queue.put_nowait(print_task)
+        else:
+            log.error('[PRINT] Failed to print to printer with #SN : {}'.format(printer_id))
+
+    except Exception as e:
+        log.error('[PRINT] Failed to decode msg : {}'.format(json_data))
+        log.error('[ERROR] {}'.format(e))
 
     return web.Response(text='.')
 
@@ -327,7 +371,12 @@ async def sgd(request):
 
     sgd_command_future = asyncio.Future()
 
-    post_data = request.content.read_nowait().decode('utf-8')
+    buffer = b""
+    async for data, end_of_http_chunk in request.content.iter_chunks():
+        buffer += data
+
+    post_data = buffer.decode('utf-8')
+
     log.debug('POST : {}'.format(post_data))
 
     for command in str(post_data).split('&'):
@@ -385,12 +434,16 @@ async def ws_keep_alive(ws, ws_info):
             await asyncio.sleep(1)
 
 
-##---
 async def reconnect(request):
     """ reconnects raw channel for specified printer if main channel is alive
     """
 
-    post_data = request.content.read_nowait().decode('utf-8')
+    buffer = b""
+    async for data, end_of_http_chunk in request.content.iter_chunks():
+        buffer += data
+
+    post_data = buffer.decode('utf-8')
+
     log.debug('POST : {}'.format(post_data))
 
     for command in str(post_data).split('&'):
@@ -535,7 +588,7 @@ async def handler(websocket, path):
         printers[printer_id].pop('id_q', None)
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
-    await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': 'disconnected', 'channel': channel_name }), compress=True)
+    await post(options['print_job_done'], data=json.dumps({'sn': printer_id, 'job_id': 'disconnected', 'channel': channel_name }), compress=True)
 
 
 def main():
@@ -543,18 +596,27 @@ def main():
     app = web.Application()
     app.router.add_route('GET', '/list_printers', list_printers)
     app.router.add_route('POST', '/reconnect', reconnect)
-    app.router.add_route('POST', '/print', print_zpl)
+    app.router.add_route('POST', '/print_ng', print_zpl_ng)
+    app.router.add_route('POST', '/print_ng_dummy', print_zpl_ng_dummy)
     app.router.add_route('POST', '/sgd', sgd)
 
     log.info("Starting websocket server : {}:{}".format(options['ws_ip'], options['ws_port']))
     loop = asyncio.get_event_loop()
 
-    start_server = websockets.serve(handler, options['ws_ip'], options['ws_port'], subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
-    loop.run_until_complete(start_server)
+    websocket_server = websockets.serve(handler, options['ws_ip'], options['ws_port'], subprotocols=['v1.weblink.zebra.com'], extra_headers={'Content-Length': '0'})
+    loop.run_until_complete(websocket_server)
     loop.run_until_complete(web.run_app(app, host=options['web_ip'], port=options['web_port']))
-    loop.run_forever()
-    loop.close()
+
+    ## sigterm
+    #loop.run_forever()
+    stop = asyncio.Future()
+    loop.add_signal_handler(signal.SIGTERM, stop.set_result, None)
+    loop.run_until_complete(stop)
+
+    websocket_server.close()
+    loop.run_until_complete(websocket_server.wait_closed())
     log.info("Shutting down websocket server")
+    time.sleep(1)
 
 
 if __name__ == '__main__':
@@ -565,6 +627,7 @@ if __name__ == '__main__':
         sys.exit(1)
 
     logging.basicConfig(filename=options['log_file'], filemode='a', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
+    #write_pid_to_pidfile(options['pid_file'])
     log = logging.getLogger(__name__)
     formatter = logging.Formatter("%(asctime)s %(levelname)s " +
                                   "[%(module)s:%(lineno)d] %(message)s")
@@ -575,4 +638,5 @@ if __name__ == '__main__':
     ch.setFormatter(formatter)
     log.addHandler(ch)
 
-    main()
+    while True:
+        main()
