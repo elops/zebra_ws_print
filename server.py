@@ -379,32 +379,30 @@ async def sgd(request):
 
     log.debug('POST : {}'.format(post_data))
 
-    for command in str(post_data).split('&'):
-        #
-        delimiter_pos = str(command).find('=')
-        printer = str(command)[:delimiter_pos]
-        task_b64_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
-        printer = str(printer)
+#
+    json_data = json.loads(post_data)
+    printer_id = json_data['printer_id']
+    sgd_command = str.encode(json_data['sgd_command'])
 
-        #
-        try:
-            sgd_command = base64.b64decode(task_b64_encoded)
-            log.info("[SGD] [{}] : {}".format(printer, sgd_command))
+    try:
+        log.info("[SGD] [{}] : {}".format(printer_id, sgd_command))
 
-            if printer in printers.keys():
-                sgd_queue = printers[printer]['config']
+        if printer_id in printers.keys():
+            sgd_queue = printers[printer_id]['config']
 
-                sgd_task = (sgd_command_future, sgd_command)
-                log.debug('[SGD] TASK PUT IN QUEUE : {} '.format(sgd_task))
-                sgd_queue.put_nowait(sgd_task)
-            else:
-                log.error('[SGD] Command failed on printer with #SN : {}'.format(printer))
+            sgd_task = (sgd_command_future, sgd_command)
+            log.debug('[SGD] TASK PUT IN QUEUE : {} '.format(sgd_task))
+            sgd_queue.put_nowait(sgd_task)
+        else:
+            log.warning('[SGD] Printer with ID {} has not connected yet'.format(printer_id))
+            return web.Response(text='[SGD] Printer with ID {} has not connected yet'.format(printer_id))
 
-            log.debug('[SGD] Queue : {}'.format(type(sgd_queue)))
-        except:
-            log.error('[SGD] Failed to decode msg : {}'.format(task_b64_encoded))
-            sgd_command_future.cancel()
-            return web.Response(text='Config channel disconnected')
+    except Exception as e:
+        log.error('[SGD] Eception while processing SGD command : {}'.format(sgd_command))
+        log.error('[SGD] Eception : {}'.format(e))
+        sgd_command_future.cancel()
+        return web.Response(text='Config channel disconnected')
+#
 
     while not sgd_command_future.done():
         await asyncio.sleep(0.1)
@@ -446,34 +444,30 @@ async def reconnect(request):
 
     log.debug('POST : {}'.format(post_data))
 
-    for command in str(post_data).split('&'):
-        #
-        delimiter_pos = str(command).find('=')
-        printer = str(command)[:delimiter_pos]
-        channel = str(command)[delimiter_pos+1:]
-        #printer = str(printer)
-        #
+    json_data = json.loads(post_data)
+    printer_id = json_data['printer_id']
+    channel = json_data['channel']
 
-        if channel not in ('raw', 'config', 'cfg'):
-            return web.Response(text=str('Channel not recognized'))
+    if channel not in ('raw', 'config', 'cfg'):
+        return web.Response(text=str('Channel not recognized'))
 
-        if printer in printers.keys():
-            if 'main' in printers[printer].keys():
-                main_queue = printers[printer]['main']
-                if channel in 'raw':
-                    log.info('Trying to open RAW channel per API request')
-                    main_queue.put_nowait((None, open_raw))
-                    return web.Response(text=str('Trying to open RAW channel per API request'))
-                else:
-                    log.info('Trying to open CONFIG channel per API request')
-                    main_queue.put_nowait((None, open_cfg))
-                    return web.Response(text=str('Trying to open CONFIG channel per API request'))
+    if printer_id in printers.keys():
+        if 'main' in printers[printer_id].keys():
+            main_queue = printers[printer_id]['main']
+            if channel in 'raw':
+                log.info('Trying to open RAW channel per API request')
+                main_queue.put_nowait((None, open_raw))
+                return web.Response(text=str('Trying to open RAW channel per API request'))
             else:
-                log.warning('Unable to find main channel for printer {}'.format(printer))
-                return web.Response(text=str('WARNING : Unable to find main channel for printer {}'.format(printer)))
+                log.info('Trying to open CONFIG channel per API request')
+                main_queue.put_nowait((None, open_cfg))
+                return web.Response(text=str('Trying to open CONFIG channel per API request'))
         else:
-            log.warning('Unable to find active printer {}'.format(printer))
-            return web.Response(text=str('WARNING : Unable to find active printer {}'.format(printer)))
+            log.warning('Unable to find main channel for printer {}'.format(printer_id))
+            return web.Response(text=str('WARNING : Unable to find main channel for printer {}'.format(printer_id)))
+    else:
+        log.warning('Unable to find active printer {}'.format(printer_id))
+        return web.Response(text=str('WARNING : Unable to find active printer {}'.format(printer_id)))
 
 
 async def handler(websocket, path):
