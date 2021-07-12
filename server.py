@@ -132,19 +132,6 @@ def glue_messages(message, full_message):
     return (full_message, end_of_msg)
 
 
-async def get(*args, **kwargs):
-    response = await aiohttp.request('GET', *args, **kwargs)
-    log.info('GET request status {} : '.format(response.status))
-    return (await response.text())
-
-
-async def post(*args, **kwargs):
-    response = await aiohttp.request('POST', *args, **kwargs)
-    
-    log.info('POST request status {} : '.format(response.status))
-    return (await response.text())
-
-
 async def consumer(queue, id_queue, message, ws_info, sgd_queue):
     """ This coroutine handles data that came from websocket, parses it
         'message' - incomming data from websocket
@@ -232,7 +219,10 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
             log.debug(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
-            await post(options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }), compress=True)
+
+            async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' })) as response:
+                log.info('RESPONSE : {} - {}'.format(response.status, await response.text()))
+
 
 
     # parse alert messages
@@ -252,12 +242,9 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
                     last_id = 'ERROR'
 
                 log.info('[{}] PRINT JOB : {} DONE'.format(printer_sn, last_id))
-                # make get request to url
-                response = await post(options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }), compress=True)
-                try:
-                    log.info("[{}] PQ JOB ACK RESPONSE  : {}".format(printer_sn, response))
-                except:
-                    log.error('Unable to read response #1')
+                # make post request to url
+                async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' })) as response:
+                    log.info("[{}] PQ JOB ACK RESPONSE  : {} - {}".format(printer_sn, response.status, await response.text()))
 
             # get data scanned from barcode
             if msg_dict['alert']['condition'] == 'SGD SET':
@@ -268,11 +255,8 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
                     log.info('[{}] SCANNED DATA : {} '.format(printer_sn, scanned_data))
 
-                    response = await post(options['scan_data_url'], data=json.dumps({'data' : scanned_data, 'sn': printer_sn}))
-                    try:
-                        log.info("[{}] SCANNED DATA : {} ACK {}".format(printer_sn, scanned_data, response))
-                    except:
-                        log.error('Unable to read response #2')
+                    async with aiohttp.request('POST', options['scan_data_url'], data=json.dumps({'data': scanned_data, 'sn': printer_sn})) as response:
+                        log.info("[{}] SCANNED DATA : {} ACK {} - {}".format(printer_sn, scanned_data, response.status, await response.text()))
 
 
 async def producer(queue):
@@ -585,7 +569,9 @@ async def handler(websocket, path):
         printers[printer_id].pop('id_q', None)
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
-    await post(options['print_job_done'], data=json.dumps({'sn': printer_id, 'job_id': 'disconnected', 'channel': channel_name }), compress=True)
+    async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': printer_id, 'job_id': 'disconnected', 'channel': channel_name })) as response:
+        log.info('Notify websocket disconnected response : {} - {}'.format(response.status, await response.text()))
+
 
 
 def main():
