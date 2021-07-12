@@ -1,0 +1,100 @@
+#!/usr/bin/env python2.7
+
+import requests
+import json
+import sys
+
+API = 'http://localhost:4100/'
+
+
+def dequote(s):
+    """
+    If a string has single or double quotes around it, remove them.
+    Make sure the pair of quotes match.
+    If a matching pair of quotes is not found, return the string unchanged.
+    """
+    if (s[0] == s[-1]) and s.startswith(("'", '"')):
+        return s[1:-1]
+    return s
+
+
+def send_sgd(printer_id, command, command_value):
+    
+    full_command = '{}{"' + str(command) + '":' + command_value + '}'
+    data = json.dumps({'printer_id' : printer_id, 'sgd_command' : full_command})
+
+    try:
+        response = requests.post(API + 'sgd', data=data)
+        print(response.content)
+    except requests.exceptions.ConnectionError as e:
+        print(e)
+        sys.exit(1)
+    except Exception as e:
+        print 'wtf - {}'.format(e)
+
+
+def print_zpl_ng(url_suffix, printer_id, zpl_code):
+    
+    data = json.dumps({'sn' : printer_id, 'data' : zpl_code})
+    try:
+        response = requests.post(API + url_suffix, data=data)
+        print response.status_code
+    except requests.exceptions.ConnectionError as e:
+        print e
+        sys.exit(1)
+    except Exception as e:
+        print 'Exception - {}'.format(e)
+
+
+def list_printer():
+    try:
+        response = requests.get(API + 'list_printers')
+        print response.content
+    except Exception as e:
+        print "Problem reaching API"
+
+
+printer_id = sys.argv[1]
+if printer_id in 'list':
+    print 'listing available printers'
+    list_printer()
+else:
+    try:
+        command = sys.argv[2]
+    except:
+        print 'Please specify printerID as 1st argument'
+        print 'Please specify command as 2nd argument'
+        sys.exit(1)
+
+    if command == 'print':
+        try:
+            zpl_file = sys.argv[3]
+        except:
+            print 'Please specify which file you want to print'
+            sys.exit(1)
+
+        with open(zpl_file, 'r') as f:
+            zpl_code = f.read()
+
+        print_zpl_ng('print_ng', printer_id, zpl_code)
+        sys.exit(0)
+
+    if command == 'dummy':
+        try:
+            zpl_file = sys.argv[3]
+        except:
+            print 'Please specify which file you want to print'
+            sys.exit(1)
+
+        with open(zpl_file, 'r') as f:
+            zpl_code = f.read()
+
+        print_zpl_ng('print_ng_dummy', printer_id, zpl_code)
+        sys.exit(0)
+
+    try:
+        command_value = '"' + dequote(sys.argv[3]) + '"'
+    except:
+        command_value = 'null'
+
+    send_sgd(printer_id, command, command_value)
