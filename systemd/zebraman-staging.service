@@ -1,0 +1,14 @@
+[Unit]
+Description=Zebraman service for customer X
+After=network.target
+
+[Service]
+User=user
+Group=group
+WorkingDirectory=/some/path/ZebraMan
+Environment="PATH=/some/path/ZebraMan/.venv39/bin"
+ExecStart=/some/path/ZebraMan/server.py
+ExecStop=/bin/kill -TERM $MAINPID
+
+[Install]
+WantedBy=multi-user.target
