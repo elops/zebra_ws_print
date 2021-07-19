@@ -220,7 +220,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
             log.debug(' *** CONFIG channel established with : {} *** '.format(serial_num))
             printers[serial_num]['config'] = queue
 
-            async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' })) as response:
+            async with aiohttp.request('POST', options['print_job_done'], json={'sn': serial_num, 'job_id': 'connected', 'channel': 'CONFIG' }) as response:
                 log.info('RESPONSE : {} - {}'.format(response.status, await response.text()))
 
 
@@ -242,8 +242,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
                     last_id = 'ERROR'
 
                 log.info('[{}] PRINT JOB : {} DONE'.format(printer_sn, last_id))
-                # make post request to url
-                async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' })) as response:
+                async with aiohttp.request('POST', options['print_job_done'], json={'sn': printer_sn, 'job_id': last_id, 'channel': 'RAW' }) as response:
                     log.info("[{}] PQ JOB ACK RESPONSE  : {} - {}".format(printer_sn, response.status, await response.text()))
 
             # get data scanned from barcode
@@ -255,7 +254,7 @@ async def consumer(queue, id_queue, message, ws_info, sgd_queue):
 
                     log.info('[{}] SCANNED DATA : {} '.format(printer_sn, scanned_data))
 
-                    async with aiohttp.request('POST', options['scan_data_url'], data=json.dumps({'data': scanned_data, 'sn': printer_sn})) as response:
+                    async with aiohttp.request('POST', options['scan_data_url'], json={'data': scanned_data, 'sn': printer_sn}) as response:
                         log.info("[{}] SCANNED DATA : {} ACK {} - {}".format(printer_sn, scanned_data, response.status, await response.text()))
 
 
@@ -569,7 +568,7 @@ async def handler(websocket, path):
         printers[printer_id].pop('id_q', None)
 
     log.debug('Notifying orderman that we lost websocket connection {} {}'.format(printer_id, channel_name))
-    async with aiohttp.request('POST', options['print_job_done'], data=json.dumps({'sn': printer_id, 'job_id': 'disconnected', 'channel': channel_name })) as response:
+    async with aiohttp.request('POST', options['print_job_done'], json={'sn': printer_id, 'job_id': 'disconnected', 'channel': channel_name }) as response:
         log.info('Notify websocket disconnected response : {} - {}'.format(response.status, await response.text()))
 
 
