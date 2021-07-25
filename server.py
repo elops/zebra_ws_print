@@ -603,9 +603,10 @@ def main():
 
 if __name__ == '__main__':
     try:
-        options = yaml.load(open('zebraman.cfg'))
+        with open('zebraman.cfg') as fh:
+            options = yaml.load(fh, Loader=yaml.FullLoader)
     except Exception as e:
-        print("Config file not present, exiting...")
+        print("Config file not present, exiting... {}".format(e))
         sys.exit(1)
 
     logging.basicConfig(filename=options['log_file'], filemode='a', format='%(asctime)s %(levelname)s [%(module)s:%(lineno)d] %(message)s', level=logging.INFO)
