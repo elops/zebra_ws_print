@@ -349,6 +349,48 @@ async def print_zpl_ng(request):
 
     return web.Response(text='.')
 
+async def print_zpl_legacy(request):
+    """ This coro receives legacy print job which is base64 encoded 
+        Used only by old OrderMan app
+    """
+
+    print_job_future = None
+
+    buffer = b""
+    async for data, end_of_http_chunk in request.content.iter_chunks():
+        buffer += data
+
+    post_data = buffer.decode('utf-8')
+    log.debug('POST : {}'.format(post_data))
+
+    for command in str(post_data).split('&'):
+        delimiter_pos = str(command).find('=')
+        printer = str(command)[:delimiter_pos]
+        print_job_encoded = urllib.parse.unquote(str(command)[delimiter_pos+1:])
+        printer = str(printer)
+
+        try:
+            print_job = base64.b64decode(print_job_encoded)
+            log.debug("[{}] Job : {}".format(printer, print_job))
+            log.debug("[PRINT] Printers : {}".format(printers))
+            if printer in printers.keys():
+                print_queue = printers[printer]['raw']
+                id_queue = printers[printer]['id_q']
+                last_id = get_msgid(print_job)
+                log.info('[{}] PRINT JOB : {} QUEUED'.format(printer, last_id))
+
+                # Signaling which message is about to be printed
+                await id_queue.put(last_id)
+                print_task = (print_job_future, print_job)
+                print_queue.put_nowait(print_task)
+            else:
+                log.error('[PRINT] Failed to print to printer with #SN : {}'.format(printer))
+        except Exception as e:
+            log.error('[PRINT] Failed to decode msg : {}'.format(print_job_encoded))
+            log.error('[ERROR] {}'.format(e))
+
+    return web.Response(text='.')
+
 
 async def sgd(request):
     """ This coro receives SGD JSON command and sends it to queue feeding
@@ -579,6 +621,7 @@ def main():
     app.router.add_route('GET', '/list_printers', list_printers)
     app.router.add_route('POST', '/reconnect', reconnect)
     app.router.add_route('POST', '/print_ng', print_zpl_ng)
+    app.router.add_route('POST', '/print', print_zpl_legacy)
     app.router.add_route('POST', '/print_ng_dummy', print_zpl_ng_dummy)
     app.router.add_route('POST', '/sgd', sgd)
 
